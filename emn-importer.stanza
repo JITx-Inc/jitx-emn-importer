@@ -71,4 +71,3 @@ defpackage %_/board :
   )
   spit(output-stanza-filename, to-string(ss))
 
-import-emn("344a681-1.emn", "344a681", "board.stanza")
