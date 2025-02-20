@@ -1,2 +1,2 @@
-package jitx/emn-importer defined-in "emn-importer.stanza"
-package jitx/idf-parser defined-in "idf-parser.stanza"
+package emn-importer defined-in "src/emn-importer.stanza"
+package idf-parser defined-in "src/idf-parser.stanza"

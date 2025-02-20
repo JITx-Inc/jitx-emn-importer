@@ -1,5 +1,5 @@
 #use-added-syntax(jitx)
-defpackage jitx/idf-parser :
+defpackage idf-parser :
   import core
   import collections
   import math

@@ -1,8 +1,8 @@
-defpackage jitx/emn-importer :
+defpackage emn-importer :
   import core
   import jitx
   import jitx/layer-specs
-  import jitx/idf-parser
+  import idf-parser
 
 defstruct Layer :
   layer : LayerIndex|LayerSpecifier
