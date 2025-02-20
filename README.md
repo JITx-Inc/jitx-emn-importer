@@ -25,7 +25,7 @@ import-emn(<path/to/input_emn_file>, <resulting_package_name>, <path/to/output/s
 ```
 e.g.
 ```
-import-emn("hello.emn", "my-package", "board.stanza")
+stanza> import-emn("hello.emn", "my-package", "board.stanza")
 ```
 
 Inside this `board.stanza` file, two variables/functions are created. The first is a variable that contains the geometry of the board outline.
