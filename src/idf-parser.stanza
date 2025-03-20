@@ -213,7 +213,37 @@ defn loopt_PolygonWithArcs ( inpts:List<loopt> ucnv:Double ) -> List<PolygonWith
 public defn IdfParser (filename:String) -> IdfFile :
   val lines = split{_ "\n"} $ replace{_, "\r\n", "\n"} $ slurp(filename)
   var b:List<String> = to-list $ for line in lines seq-cat :
-    tokenize-shell-command(line)
+    ; tokenize one line
+    ; tokenize-shell-command(line) can't be used because things like this
+    ; "---- GND" will be treated as one element instead of two
+    generate<String> :
+      let loop (l:String = line, in-quote?:True|False = false) :
+        val first-space = index-of-char(l, ' ')
+        val first-quote = index-of-char(l, '"')
+        if in-quote? :
+          match(first-quote) :
+            (q:Int) :
+              yield $ l[0 to q]
+              loop(l[(q + 1) to false] false)
+            (_) :
+              yield $ l
+        else :
+          match(first-space, first-quote) :
+            (s:Int q:Int) :
+              if s < q :
+                if not (s == 0 and l[0] == ' ') :
+                  yield $ l[0 to s]
+                loop(l[(s + 1) to false], false)
+              else :
+                loop(l[(q + 1) to false], true)
+            (s:Int q) :
+              if not (s == 0 and l[0] == ' ') :
+                yield $ l[0 to s]
+              loop(l[(s + 1) to false], false)
+            (s q:Int) :
+              loop(l[(q + 1) to false], true)
+            (s q) :
+              yield $ l
 
   var ucnv:Double = 1.0
 
@@ -329,6 +359,8 @@ public defn IdfParser (filename:String) -> IdfFile :
         val ps = idf_placement_parser(h ucnv)
         add-all(placement, ps)
         b = tailn(b,endp + 2)
+      qt == "" :
+        b = tailn(b,1)
       else :
         println("you are at the else statement, this is a problem")
         println(b)
