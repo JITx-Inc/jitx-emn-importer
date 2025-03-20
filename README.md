@@ -19,13 +19,14 @@ jitx-emn-importer = { git = "JITx-Inc/jitx-emn-importer", version = "0.1.1" }
 
 ## Running the Importer
 
-In order to generate the JITX code that mirrors the data in the EMN file, at the REPL (i.e. JITX shell) you need to call the `import-emn` function to generate a `board.stanza` file.
+In order to generate the JITX code that mirrors the data in the EMN file, at the REPL (i.e. JITX shell) you need to call the `import-emn` function to generate a `board.stanza` file.  
 
 ```
 import-emn(<path/to/input_emn_file>, <resulting_package_name>, <path/to/output/stanza_file>)
 ```
-e.g.
+To start, you will need to restart the JITX shell in order for `slm` to download and install the repo. After restarting the shell, you will also need import the library at the command prompt e.g.
 ```
+stanza> import emn-importer
 stanza> import-emn("hello.emn", "my-package", "board.stanza")
 ```
 
