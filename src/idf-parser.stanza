@@ -204,7 +204,15 @@ defn loopt_PolygonWithArcs ( inpts:List<loopt> ucnv:Double ) -> List<PolygonWith
         match(x) :
           (c:Circle|Point) : c
           (arc:Arc) : Arc(end-point(arc), mid-point(arc), start-point(arc))
-    val elems** = reverse-list(elems*) when key(kv) != 0 else elems*
+    defn only-circle (xs:List<Circle|Point|Arc>) -> List<Circle|Point|Arc> :
+      val circle? = for x in xs first :
+        match(x:Circle) : One(x)
+        else : None()
+      if not empty?(circle?) :
+        to-list $ [value!(circle?)]
+      else :
+        xs
+    val elems** = only-circle $ reverse-list(elems*) when key(kv) != 0 else elems*
     match(head(elems**)) :
       (c:Circle) : c
       (_) : PolygonWithArcs(elems**)
