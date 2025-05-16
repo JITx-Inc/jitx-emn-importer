@@ -69,3 +69,6 @@ pubilc pcb-module my-top-level-module :
   ...
 ```
 
+## Using EMN (IDF/BDF) files as a Cadence user
+
+In Cadence PCB tools, like Allegro, you have the ability to export IDF format files. Choose that option and to also filter out all objects except cutouts and board edge. If you export with the defaults, the export data will also contain all cutouts of vias, pads, etc. The resulting `.bdf` file is in the EMN format and can be used by this importer.
