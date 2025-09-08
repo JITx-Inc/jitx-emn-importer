@@ -1,74 +1,153 @@
-# jitx-emn-importer
+# JITX EMN/IDF Importer
 
+A JITX Python library for importing EMN/IDF/BDF format files and converting them to JITX-compatible PCB design data. This library parses mechanical board outline data, cutouts, keepouts, holes, notes, and placement information from CAD exports and generates JITX Python geometry and layer specifications.
 
+## Features
 
-## How to Enable
+- **Complete EMN/IDF/BDF parsing**: Handles all standard sections including board outlines, cutouts, keepouts, holes, notes, and component placement
+- **JITX Python compatibility**: Generates proper JITX Python layer specifications using Cutout, KeepOut, and Custom features
+- **Flexible output formats**: Can generate standalone helper functions or complete JITX Design classes
+- **Geometry conversion**: Converts EMN geometry (including arcs and complex polygons) to JITX primitive shapes
+- **Unit handling**: Automatic conversion between THOU and MM units
+- **Clean code generation**: Produces readable, well-commented Python code
 
-Run the following command at the command prompt in your JITX project directory:
+## Installation
 
-```
-$> $SLM add -git JITx-Inc/jitx-emn-importer
-```
+```bash
+# Install from source (when package is available)
+pip install jitx-emn-importer
 
-This will add a line like this to your `slm.toml` file:
-
-```
-[dependencies]
-jitx-emn-importer = { git = "JITx-Inc/jitx-emn-importer", version = "0.1.1" }
-```
-
-## Running the Importer
-
-In order to generate the JITX code that mirrors the data in the EMN file, at the REPL (i.e. JITX shell) you need to call the `import-emn` function to generate a `board.stanza` file.  
-
-```
-import-emn(<path/to/input_emn_file>, <resulting_package_name>, <path/to/output/stanza_file>)
-```
-To start, you will need to restart the JITX shell in order for `slm` to download and install the repo. After restarting the shell, you will also need import the library at the command prompt e.g.
-```
-stanza> import emn-importer
-stanza> import-emn("hello.emn", "my-package", "board.stanza")
+# Or install directly from this directory
+pip install -e .
 ```
 
-## Usage in Code
+## Usage
 
-In order to use this new `board.stanza` file in your project, you should add it to your project's `stanza.proj` as follows:
+### Command Line Interface
 
-```
-package my-package/board defined-in "board.stanza"
-```
-And in your top level design file you should also import this new package as follows:
-```
-import my-package/board
-```
+```bash
+# Generate helper functions
+python -m emn_importer board.emn MyBoard output.py
 
-Inside the created `board.stanza` file, one variable and one function are present. The variable contains the board outline geometry that is accessible in the user's board definition.
-
-`public val emn-board-outline`
-
-Use this as your `boundary` parameter in `pcb-board` definition in your existing project. For example,
-
-```
-pcb-board my-board :
-  boundary = emn-board-outline ; use the variable available in the board.stanza file
-  ...
-```
-The module definition in the `board.stanza` file contains the other imported mechanical data from the board such as cutouts, text, etc. You can edit the module definition to change the layers and text for instance.
-
-`public defn emn-module ()`
-
-In order to correctly use this data in your design, you will define a new `pcb-module` that calls this function. In order to ensure correct placement, place it at location `loc(0.0, 0.0)` at the top level. For example,
-
-```
-public pcb-module my-emn-cutouts :
-  emn-module() ; let's instantiate the mechanical data
-
-pubilc pcb-module my-top-level-module :
-  inst cutouts : my-emn-cutouts ; to import the data into the top level
-  place(cutouts) at loc(0.0, 0.0) on Top ; now let's correctly place the imported mechanical data
-  ...
+# Generate complete Design class
+python -m emn_importer board.emn MyBoard output.py --design-class
 ```
 
-## Using EMN (IDF/BDF) files as a Cadence user
+### Python API
 
-In Cadence PCB tools, like Allegro, you have the ability to export IDF format files. Choose that option and to also filter out all objects except cutouts and board edge. If you export with the defaults, the export data will also contain all cutouts of vias, pads, etc. The resulting `.bdf` file is in the EMN format and can be used by this importer.
+```python
+from jitx_emn_importer import import_emn, import_emn_to_design_class, idf_parser
+
+# Parse EMN file to structured data
+idf_data = idf_parser("board.emn")
+print(f"Board has {len(idf_data.holes)} holes and {len(idf_data.notes)} notes")
+
+# Generate helper functions
+import_emn("board.emn", "MyBoard", "board_helpers.py")
+
+# Generate complete Design class  
+import_emn_to_design_class("board.emn", "MyBoard", "board_design.py")
+```
+
+### Generated Code Example
+
+The library generates clean JITX Python code:
+
+```python
+"""
+Generated JITX Python board definition from EMN/IDF import
+Package: MyBoard
+"""
+
+from jitx import *
+from jitx.shapes.primitive import Circle, Text, Polygon, ArcPolygon
+from jitx.feature import Cutout, KeepOut, Custom
+from jitx.layerindex import LayerSet, Side
+from jitx.anchor import Anchor
+
+# Board outline shape
+emn_board_outline = Polygon([(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)])
+
+def emn_module():
+    """Generated mechanical data from EMN/IDF import"""
+    layer(Cutout(Circle(radius=1.0).at(10.0, 10.0)))
+    layer(KeepOut(Circle(radius=5.0), layers=LayerSet.all(), pour=True, via=False))
+    layer(Custom(Text("COMPONENT AREA", size=1.5, anchor=Anchor.SW).at(20.0, 30.0), name="Assembly Notes"))
+
+# Example usage in a JITX design:
+# 
+# from jitx.board import Board
+# from jitx.circuit import Circuit
+# from jitx.design import Design
+# 
+# class MyBoard(Board):
+#     shape = emn_board_outline
+# 
+# class MyCircuit(Circuit):
+#     def __init__(self):
+#         super().__init__()
+#         emn_module()  # Add mechanical features
+# 
+# class MyDesign(Design):
+#     board = MyBoard()
+#     circuit = MyCircuit()
+```
+
+## Supported EMN/IDF Features
+
+| Feature | EMN Section | JITX Output | Description |
+|---------|-------------|-------------|-------------|
+| Board Outline | `.BOARD_OUTLINE` | Board.shape | Main board perimeter |
+| Board Cutouts | `.BOARD_OUTLINE` (cutouts) | `Cutout()` | Slots and complex cutouts |  
+| Drilled Holes | `.DRILLED_HOLES` | `Cutout(Circle())` | Through holes |
+| Route Keepouts | `.ROUTE_KEEPOUT` | `KeepOut(pour=True)` | Copper pour restrictions |
+| Via Keepouts | `.VIA_KEEPOUT` | `KeepOut(via=True)` | Via placement restrictions |
+| Place Keepouts | `.PLACE_KEEPOUT` | `Custom()` | Component placement guides |
+| Notes | `.NOTES` | `Custom(Text())` | Assembly text annotations |
+| Component Placement | `.PLACEMENT` | `Custom(Text())` | Component position markers |
+
+## Architecture
+
+The library consists of two main modules:
+
+### idf_parser.py
+- Low-level EMN/IDF file parsing
+- Geometry conversion (arcs, circles, polygons)
+- Unit conversion (THOU ↔ MM)
+- Data structure definitions
+
+### emn_importer.py  
+- High-level import interface
+- JITX Python code generation
+- Layer specification mapping
+- Design class templates
+
+## Development
+
+The library was ported from the original Stanza implementation to ensure compatibility with JITX Python while maintaining all parsing capabilities.
+
+### Key Conversion Points:
+- **Stanza → Python**: Converted functional Stanza code to object-oriented Python
+- **Geometry**: Maps Stanza shapes to JITX Python primitive shapes  
+- **Layers**: Converts Stanza layer specs to JITX Python feature classes
+- **Code Generation**: Produces idiomatic Python instead of Stanza syntax
+
+### Dependencies:
+- JITX Python API (shapes, features, layer specifications)
+- Python 3.8+ standard library
+
+## Examples
+
+See the `examples/` directory for sample EMN files and their generated outputs.
+
+## Contributing
+
+This library is part of the JITX ecosystem. For issues and contributions:
+1. Check existing issues on GitHub
+2. Follow JITX coding standards  
+3. Include test cases for new features
+4. Update documentation as needed
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
