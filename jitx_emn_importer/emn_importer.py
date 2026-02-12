@@ -7,9 +7,12 @@ layer specifications and generates Python code for board definitions.
 Port from Stanza emn-importer.stanza to Python for use with JITX Python API.
 """
 
+import logging
 import re
-from typing import List, Union, TextIO, Tuple, Any
+from typing import Any
 from io import StringIO
+
+logger = logging.getLogger(__name__)
 
 # Type hints for JITX classes (will be imported or mocked)
 Circle = Any
@@ -31,60 +34,82 @@ try:
 except ImportError:
     # Mock classes for when JITX Python is not available
     JITX_AVAILABLE = False
-    
+
+    class _PositionedShape:
+        """Mock positioned shape that tracks location"""
+        def __init__(self, shape: Any, x: float, y: float):
+            self.shape = shape
+            self.x = x
+            self.y = y
+
+        def __repr__(self) -> str:
+            return f"{self.shape!r}.at({self.x}, {self.y})"
+
     class Circle:  # type: ignore
         def __init__(self, radius: float):
             self.radius = radius
-        def at(self, x: float, y: float) -> str:
-            return f"Circle(radius={self.radius}).at({x}, {y})"
+
+        def at(self, x: float, y: float) -> _PositionedShape:
+            return _PositionedShape(self, x, y)
+
         def __repr__(self) -> str:
             return f"Circle(radius={self.radius})"
-    
+
     class Text:  # type: ignore
         def __init__(self, text: str, size: float = 1.0, anchor: Any = None):
             self.text = text
             self.size = size
             self.anchor = anchor
-        def at(self, x: float, y: float) -> str:
-            return f'Text("{self.text}", size={self.size}, anchor={self.anchor}).at({x}, {y})'
+
+        def at(self, x: float, y: float) -> _PositionedShape:
+            return _PositionedShape(self, x, y)
+
         def __repr__(self) -> str:
-            return f'Text("{self.text}", size={self.size}, anchor={self.anchor})'
-    
+            anchor_str = f'Anchor.{self.anchor}' if isinstance(self.anchor, str) else self.anchor
+            return f'Text("{self.text}", size={self.size}, anchor={anchor_str})'
+
     class Cutout:  # type: ignore
         def __init__(self, shape: Any):
             self.shape = shape
+
         def __repr__(self) -> str:
-            return f"Cutout({self.shape})"
-    
+            return f"Cutout({self.shape!r})"
+
     class KeepOut:  # type: ignore
         def __init__(self, shape: Any, layers: Any = None, pour: bool = False, via: bool = False):
             self.shape = shape
             self.layers = layers
             self.pour = pour
             self.via = via
+
         def __repr__(self) -> str:
-            return f"KeepOut({self.shape}, layers={self.layers}, pour={self.pour}, via={self.via})"
-    
+            return f"KeepOut({self.shape!r}, layers={self.layers!r}, pour={self.pour}, via={self.via})"
+
     class Custom:  # type: ignore
         def __init__(self, shape: Any, name: str = "Custom"):
             self.shape = shape
             self.name = name
+
         def __repr__(self) -> str:
-            return f'Custom({self.shape}, name="{self.name}")'
-    
+            return f'Custom({self.shape!r}, name="{self.name}")'
+
     class LayerSet:  # type: ignore
         def __init__(self, *args: Any):
             self.layers = args
+
         @classmethod
         def all(cls) -> 'LayerSet':
             return cls("ALL")
+
         def __repr__(self) -> str:
-            return f"LayerSet({self.layers})"
-    
+            if len(self.layers) == 1 and self.layers[0] == "ALL":
+                return "LayerSet.all()"
+            return f"LayerSet({', '.join(map(str, self.layers))})"
+
     class Side:  # type: ignore
         Top = "Top"
         Bottom = "Bottom"
-    
+
     class Anchor:  # type: ignore
         SW = "SW"
         C = "C"
@@ -119,21 +144,47 @@ def indent_text(text: str, levels: int = 1) -> str:
 
 
 def shape_to_python_code(shape: Any, var_name: str | None = None) -> str:
-    """Convert a JITX shape to Python code string"""
+    """Convert a JITX shape to Python code string
+
+    Note: ArcPolygon conversion is incomplete and will require manual editing.
+    ArcPolygon elements contain mixed Arc and point tuples which cannot be
+    easily serialized to Python code.
+    """
     if hasattr(shape, '__class__'):
         class_name = shape.__class__.__name__
-        
+
         if class_name == "Circle":
             return f"Circle(radius={shape.radius})"
-        elif hasattr(shape, 'points') and shape.points:
-            points_str = ', '.join([f"({p[0]}, {p[1]})" for p in shape.points])
-            return f"{class_name}([{points_str}])"
-        elif class_name == "ArcPolygon" and hasattr(shape, 'elements'):
-            # Handle ArcPolygon specially
-            if var_name:
-                return f"{var_name}_shape"  # Reference pre-defined variable
+        elif class_name == "ArcPolygon":
+            # ArcPolygon contains mixed Arc objects and point tuples
+            elements_code = []
+            for elem in shape.elements:
+                if isinstance(elem, tuple):
+                    # Point tuple
+                    elements_code.append(f"({elem[0]}, {elem[1]})")
+                elif hasattr(elem, 'center') and hasattr(elem, 'radius'):
+                    # Arc object - serialize with center, radius, start_angle, sweep_angle
+                    center = elem.center
+                    elements_code.append(
+                        f"Arc(({center[0]}, {center[1]}), {elem.radius}, "
+                        f"{elem.start_angle}, {elem.sweep_angle})"
+                    )
+                else:
+                    # Unknown element type - add comment
+                    elements_code.append(f"# Unknown element: {type(elem).__name__}")
+            return f"ArcPolygon([{', '.join(elements_code)}])"
+        elif class_name == "Polygon" and hasattr(shape, 'elements'):
+            # JITX Polygon uses 'elements' parameter
+            elements_str = ', '.join([f"({p[0]}, {p[1]})" for p in shape.elements])
+            return f"Polygon([{elements_str}])"
+        elif hasattr(shape, 'elements') and shape.elements:
+            # Handle other shapes with elements - check if all are tuples
+            if all(isinstance(e, tuple) for e in shape.elements):
+                elements_str = ', '.join([f"({p[0]}, {p[1]})" for p in shape.elements])
+                return f"{class_name}([{elements_str}])"
             else:
-                return f"ArcPolygon(elements)"  # Fallback
+                # Complex shape with non-tuple elements
+                return f"{class_name}([])  # TODO: Complex shape - manual editing required"
         else:
             return f"{class_name}()"  # fallback
     else:
@@ -153,7 +204,7 @@ def determine_layer_set(layers_str: str) -> str:
         return "LayerSet.all()"
 
 
-def convert_idf_to_layer_code(idf: IdfFile) -> Tuple[List[str], List[str]]:
+def convert_idf_to_layer_code(idf: IdfFile) -> tuple[list[str], list[str]]:
     """
     Convert IDF data structures to JITX layer specification code.
     Returns tuple of (layer_statements, variable_definitions)
@@ -233,7 +284,7 @@ Package: {clean_package}
 """
 
 from jitx import *
-from jitx.shapes.primitive import Circle, Text, Polygon, ArcPolygon
+from jitx.shapes.primitive import Arc, Circle, Text, Polygon, ArcPolygon
 from jitx.feature import Cutout, KeepOut, Custom
 from jitx.layerindex import LayerSet, Side
 from jitx.anchor import Anchor
@@ -307,11 +358,11 @@ def import_emn(emn_filename: str, package_name: str, output_filename: str) -> No
     with open(output_filename, 'w') as f:
         f.write(python_code)
     
-    print(f"Successfully imported {emn_filename} to {output_filename}")
-    print(f"Package name: {package_name}")
-    print(f"Board outline: {type(idf.board_outline).__name__}")
-    print(f"Features: {len(idf.board_cutouts)} cutouts, {len(idf.holes)} holes, "
-          f"{len(idf.notes)} notes, {len(idf.placement)} parts")
+    logger.info("Successfully imported %s to %s", emn_filename, output_filename)
+    logger.info("Package name: %s", package_name)
+    logger.info("Board outline: %s", type(idf.board_outline).__name__)
+    logger.info("Features: %d cutouts, %d holes, %d notes, %d parts",
+                len(idf.board_cutouts), len(idf.holes), len(idf.notes), len(idf.placement))
 
 
 def import_emn_to_design_class(emn_filename: str, class_name: str, output_filename: str) -> None:
@@ -343,7 +394,7 @@ Design: {clean_class}
 """
 
 from jitx import *
-from jitx.shapes.primitive import Circle, Text, Polygon, ArcPolygon
+from jitx.shapes.primitive import Arc, Circle, Text, Polygon, ArcPolygon
 from jitx.feature import Cutout, KeepOut, Custom
 from jitx.layerindex import LayerSet, Side
 from jitx.anchor import Anchor
@@ -393,14 +444,14 @@ from jitx.circuit import Circuit
     with open(output_filename, 'w') as f:
         f.write(output.getvalue())
     
-    print(f"Successfully imported {emn_filename} to {output_filename}")
-    print(f"Generated Design class: {clean_class}Design")
-    print(f"Board outline: {type(idf.board_outline).__name__}")
-    print(f"Features: {len(idf.board_cutouts)} cutouts, {len(idf.holes)} holes, "
-          f"{len(idf.notes)} notes, {len(idf.placement)} parts")
+    logger.info("Successfully imported %s to %s", emn_filename, output_filename)
+    logger.info("Generated Design class: %sDesign", clean_class)
+    logger.info("Board outline: %s", type(idf.board_outline).__name__)
+    logger.info("Features: %d cutouts, %d holes, %d notes, %d parts",
+                len(idf.board_cutouts), len(idf.holes), len(idf.notes), len(idf.placement))
 
 
-def convert_emn_to_jitx_features(idf_file: IdfFile) -> List[Any]:
+def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
     """
     Convert parsed EMN data to actual JITX feature objects (not just code strings).
     This can be used for direct programmatic access to the features.
@@ -470,19 +521,32 @@ def convert_emn_to_jitx_features(idf_file: IdfFile) -> List[Any]:
     return features
 
 
-if __name__ == "__main__":
+def main():
+    """Command-line interface for EMN/IDF importer"""
     import sys
-    
+
     if len(sys.argv) < 4:
-        print("Usage: python emn_importer.py <emn_file> <package_name> <output_file> [--design-class]")
+        print("Usage: python -m jitx_emn_importer.emn_importer <emn_file> <package_name> <output_file> [--design-class]")
+        print("  or: emn-import <emn_file> <package_name> <output_file> [--design-class]")
+        print("")
+        print("Arguments:")
+        print("  emn_file      : Path to the EMN/IDF/BDF file to import")
+        print("  package_name  : Name for the generated package/class")
+        print("  output_file   : Output Python file path")
+        print("")
+        print("Options:")
         print("  --design-class: Generate a complete Design class instead of just helper functions")
         sys.exit(1)
-    
-    emn_file = sys.argv[1] 
+
+    emn_file = sys.argv[1]
     package_name = sys.argv[2]
     output_file = sys.argv[3]
-    
+
     if len(sys.argv) > 4 and sys.argv[4] == "--design-class":
         import_emn_to_design_class(emn_file, package_name, output_file)
     else:
         import_emn(emn_file, package_name, output_file)
+
+
+if __name__ == "__main__":
+    main()

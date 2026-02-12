@@ -27,10 +27,13 @@ pip install -e .
 
 ```bash
 # Generate helper functions
-python -m emn_importer board.emn MyBoard output.py
+emn-import board.emn MyBoard output.py
 
 # Generate complete Design class
-python -m emn_importer board.emn MyBoard output.py --design-class
+emn-import board.emn MyBoard output.py --design-class
+
+# Or use as a Python module
+python -m jitx_emn_importer.emn_importer board.emn MyBoard output.py
 ```
 
 ### Python API
@@ -132,13 +135,19 @@ The library was ported from the original Stanza implementation to ensure compati
 - **Layers**: Converts Stanza layer specs to JITX Python feature classes
 - **Code Generation**: Produces idiomatic Python instead of Stanza syntax
 
-### Dependencies:
-- JITX Python API (shapes, features, layer specifications)
-- Python 3.8+ standard library
+### Dependencies
+- JITX Python API (shapes, features, layer specifications) - optional, mock classes used when unavailable
+- Python 3.12+ standard library
 
-## Examples
+### Running Tests
 
-See the `examples/` directory for sample EMN files and their generated outputs.
+```bash
+# Install with development dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/ -v
+```
 
 ## Contributing
 

@@ -8,10 +8,46 @@ Port from Stanza idf-parser.stanza to Python for use with JITX Python API.
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple, Union, Optional
+import logging
 import math
+from typing import Any
 
-from jitx.shapes.primitive import Circle, Arc, Polygon, ArcPolygon
+logger = logging.getLogger(__name__)
+
+# Try to import JITX Python classes, fall back to mocks if not available
+try:
+    from jitx.shapes.primitive import Circle, Arc, Polygon, ArcPolygon  # type: ignore
+    JITX_AVAILABLE = True
+except ImportError:
+    # Mock geometry classes for when JITX Python is not available
+    JITX_AVAILABLE = False
+
+    class Circle:  # type: ignore
+        def __init__(self, radius: float):
+            self.radius = radius
+        def __repr__(self) -> str:
+            return f"Circle(radius={self.radius})"
+
+    class Arc:  # type: ignore
+        def __init__(self, center: tuple[float, float], radius: float, start_angle: float, sweep_angle: float):
+            self.center = center
+            self.radius = radius
+            self.start_angle = start_angle
+            self.sweep_angle = sweep_angle
+        def __repr__(self) -> str:
+            return f"Arc(center={self.center}, radius={self.radius}, start={self.start_angle}, sweep={self.sweep_angle})"
+
+    class Polygon:  # type: ignore
+        def __init__(self, elements: list[tuple[float, float]]):
+            self.elements = elements
+        def __repr__(self) -> str:
+            return f"Polygon({len(self.elements)} points)"
+
+    class ArcPolygon:  # type: ignore
+        def __init__(self, elements: list[Any]):
+            self.elements = elements
+        def __repr__(self) -> str:
+            return f"ArcPolygon({len(self.elements)} elements)"
 
 
 class IdfException(Exception):
@@ -38,8 +74,8 @@ class IdfOutline:
     ident: str  # board/panel/route/place_outline identifier or keepout identifier
     thickness: float  # height field for place outlines, 0.0 for no depth
     layers: str  # side for place outlines/keepouts, empty for via keepouts or board outline
-    outline: Union[Polygon, ArcPolygon, Circle]
-    cutouts: List[Union[Polygon, ArcPolygon, Circle]]
+    outline: Polygon | ArcPolygon | Circle
+    cutouts: list[Polygon | ArcPolygon | Circle]
 
 
 @dataclass
@@ -82,23 +118,23 @@ class IdfPart:
 class IdfPlacement:
     """IDF placement group"""
     ident: str
-    parts: List[IdfPart]
+    parts: list[IdfPart]
 
 
 @dataclass
 class IdfFile:
     """Complete parsed IDF file data"""
     header: IdfHeader
-    board_outline: Union[Polygon, ArcPolygon, Circle]
-    board_cutouts: Tuple[Union[Polygon, ArcPolygon, Circle], ...]
-    other_outlines: Tuple[IdfOutline, ...]
-    route_outlines: Tuple[IdfOutline, ...]
-    route_keepouts: Tuple[IdfOutline, ...]
-    via_keepouts: Tuple[IdfOutline, ...]
-    place_keepouts: Tuple[IdfOutline, ...]
-    holes: Tuple[IdfHole, ...]
-    notes: Tuple[IdfNote, ...]
-    placement: Tuple[IdfPart, ...]
+    board_outline: Polygon | ArcPolygon | Circle
+    board_cutouts: tuple[Polygon | ArcPolygon | Circle, ...]
+    other_outlines: tuple[IdfOutline, ...]
+    route_outlines: tuple[IdfOutline, ...]
+    route_keepouts: tuple[IdfOutline, ...]
+    via_keepouts: tuple[IdfOutline, ...]
+    place_keepouts: tuple[IdfOutline, ...]
+    holes: tuple[IdfHole, ...]
+    notes: tuple[IdfNote, ...]
+    placement: tuple[IdfPart, ...]
 
 
 @dataclass
@@ -119,14 +155,14 @@ class IdfParser:
         self.ucnv = 1.0  # unit conversion factor
         self.loop_id_seq = 0
     
-    def _find_section_end(self, tokens: List[str], match_str: str) -> int:
+    def _find_section_end(self, tokens: list[str], match_str: str) -> int:
         """Find the position of the section end marker"""
         try:
             return tokens.index(match_str)
         except ValueError:
             raise IdfException(f"{match_str} not found.")
     
-    def _tokenize_line(self, line: str) -> List[str]:
+    def _tokenize_line(self, line: str) -> list[str]:
         """Tokenize a line, handling quotes properly"""
         tokens = []
         i = 0
@@ -159,8 +195,12 @@ class IdfParser:
         
         return tokens
     
-    def _parse_loop_points(self, tokens: List[str]) -> List[LoopPoint]:
-        """Parse loop point data from tokens"""
+    def _parse_loop_points(self, tokens: list[str]) -> list[LoopPoint]:
+        """Parse loop point data from tokens
+
+        Note: Stores raw coordinates without unit conversion.
+        Conversion happens in _points_to_geometry().
+        """
         points = []
         i = 0
         while i + 3 < len(tokens):
@@ -176,7 +216,7 @@ class IdfParser:
             i += 4
         return points
     
-    def _parse_holes(self, tokens: List[str]) -> List[IdfHole]:
+    def _parse_holes(self, tokens: list[str]) -> list[IdfHole]:
         """Parse hole data from tokens"""
         holes = []
         i = 0
@@ -194,7 +234,7 @@ class IdfParser:
             i += 7
         return holes
     
-    def _parse_notes(self, tokens: List[str]) -> List[IdfNote]:
+    def _parse_notes(self, tokens: list[str]) -> list[IdfNote]:
         """Parse note data from tokens"""
         notes = []
         i = 0
@@ -210,7 +250,7 @@ class IdfParser:
             i += 5
         return notes
     
-    def _parse_placement(self, tokens: List[str]) -> List[IdfPart]:
+    def _parse_placement(self, tokens: list[str]) -> list[IdfPart]:
         """Parse placement data from tokens"""
         parts = []
         i = 0
@@ -230,27 +270,35 @@ class IdfParser:
             i += 9
         return parts
     
-    def _points_to_geometry(self, loop_points: List[LoopPoint]) -> List[Union[Polygon, ArcPolygon, Circle]]:
-        """Convert loop points to JITX geometry objects"""
+    def _points_to_geometry(self, loop_points: list[LoopPoint]) -> list[Polygon | ArcPolygon | Circle]:
+        """Convert loop points to JITX geometry objects
+
+        Applies unit conversion (self.ucnv) to coordinates during geometry creation.
+        Handles straight lines, arcs, and full circles.
+        """
         if not loop_points:
             return []
-        
+
         # Group by loop number
-        loops = {}
+        loops: dict[int, list[LoopPoint]] = {}
         for point in loop_points:
             if point.loop_n not in loops:
                 loops[point.loop_n] = []
             loops[point.loop_n].append(point)
-        
+
         geometries = []
-        for points in loops.values():
+        for loop_num, points in loops.items():
             # Sort by id to ensure correct order
             points.sort(key=lambda p: p.id)
-            
+
+            if not points:
+                continue
+
             # Build geometry elements
             elements = []
-            current_point = (points[0].x * self.ucnv, points[0].y * self.ucnv)
-            
+            first_point = (points[0].x * self.ucnv, points[0].y * self.ucnv)
+            current_point = first_point
+
             for point in points:
                 if point.angle == 0.0:
                     # Straight line point
@@ -258,12 +306,13 @@ class IdfParser:
                     elements.append(new_point)
                     current_point = new_point
                 elif abs(point.angle) == 360.0:
-                    # Full circle
+                    # Full circle - chord is the diameter
                     new_point = (point.x * self.ucnv, point.y * self.ucnv)
-                    dist = math.sqrt((current_point[0] - new_point[0])**2 + 
+                    dist = math.sqrt((current_point[0] - new_point[0])**2 +
                                    (current_point[1] - new_point[1])**2)
-                    circle = Circle(radius=dist)
-                    geometries.append(circle)
+                    if dist > 0:
+                        circle = Circle(radius=dist / 2.0)
+                        geometries.append(circle)
                     current_point = new_point
                     continue  # Don't add to elements, return as separate circle
                 else:
@@ -272,54 +321,75 @@ class IdfParser:
                     xn = point.x * self.ucnv
                     yn = point.y * self.ucnv
                     angle = point.angle
-                    
+
                     # Calculate arc parameters
                     dist = math.sqrt((xp - xn)**2 + (yp - yn)**2)
-                    if dist == 0:
+                    if dist < 1e-10:  # Points are too close
+                        logger.warning("Arc segment in loop %d has zero or near-zero length, skipping", loop_num)
                         continue
-                        
+
                     xm = (xp + xn) / 2.0
                     ym = (yp + yn) / 2.0
-                    
+
                     rise_x = (xn - xp) / dist
                     rise_y = (yn - yp) / dist
-                    
+
                     half_sw_ang = math.radians(angle / 2.0)
-                    if abs(math.sin(half_sw_ang)) < 1e-10:  # Avoid division by zero
+                    sin_half = math.sin(half_sw_ang)
+                    if abs(sin_half) < 1e-10:  # Avoid division by zero
+                        logger.warning("Arc segment in loop %d has invalid angle %s, skipping", loop_num, angle)
                         continue
-                        
+
                     dist_over_2 = dist / 2.0
-                    radius = abs(dist_over_2 / math.sin(half_sw_ang))
-                    
+                    radius = abs(dist_over_2 / sin_half)
+
                     over180 = -1.0 if abs(angle) > 180.0 else 1.0
                     negative = -1.0 if angle < 0 else 1.0
-                    
-                    dist_m_to_c = math.sqrt(max(0, radius**2 - dist_over_2**2))
+
+                    # Calculate center point
+                    radius_sq_minus_d2 = radius**2 - dist_over_2**2
+                    if radius_sq_minus_d2 < -1e-6:  # Negative with tolerance
+                        logger.warning("Arc segment in loop %d has invalid geometry (radius too small), skipping", loop_num)
+                        continue
+
+                    dist_m_to_c = math.sqrt(max(0, radius_sq_minus_d2))
                     xc = xm - rise_y * dist_m_to_c * over180 * negative
                     yc = ym + rise_x * dist_m_to_c * over180 * negative
-                    
+
                     start_ang = math.degrees(math.atan2(yp - yc, xp - xc))
-                    if start_ang < 0:
+                    # Normalize to [0, 360)
+                    while start_ang < 0:
                         start_ang += 360.0
-                    elif start_ang > 360:
+                    while start_ang >= 360.0:
                         start_ang -= 360.0
-                    
+
                     arc = Arc((xc, yc), radius, start_ang, angle)
                     elements.append(arc)
                     current_point = (xn, yn)
-            
+
+            # EMN loops are implicitly closed, but ensure closure for polygon types
+            # If we have points and the last point is not the first, close the loop
+            if elements and isinstance(elements[0], tuple):
+                # Check if loop is already closed
+                if isinstance(elements[-1], tuple):
+                    last_pt = elements[-1]
+                    if abs(last_pt[0] - first_point[0]) > 1e-6 or abs(last_pt[1] - first_point[1]) > 1e-6:
+                        # Not closed, add first point to close
+                        elements.append(first_point)
+
             # Create geometry based on elements
             if len(elements) == 1 and isinstance(elements[0], Circle):
                 geometries.append(elements[0])
             elif any(isinstance(e, Arc) for e in elements):
                 # Has arcs - create ArcPolygon
-                geometries.append(ArcPolygon(elements))
+                if len(elements) > 0:
+                    geometries.append(ArcPolygon(elements))
             else:
                 # Only points - create regular Polygon
-                points = [e for e in elements if isinstance(e, tuple)]
-                if len(points) >= 3:
-                    geometries.append(Polygon(points))
-        
+                poly_points = [e for e in elements if isinstance(e, tuple)]
+                if len(poly_points) >= 3:
+                    geometries.append(Polygon(poly_points))
+
         return geometries
     
     def parse(self) -> IdfFile:
@@ -373,7 +443,7 @@ class IdfParser:
                 elif header.units == "MM":
                     self.ucnv = 1.0
                 else:
-                    print(f"Unknown units: {header.units}, assuming MM")
+                    logger.warning("Unknown units: %s, assuming MM", header.units)
                     self.ucnv = 1.0
                 
                 i = i + 1 + end_pos + 1
@@ -561,10 +631,21 @@ class IdfParser:
         # Validate parsed data
         if len(headers) != 1:
             raise IdfException(f"Expected exactly 1 header, found {len(headers)}")
-        
+
         if len(board_outlines) != 1:
             raise IdfException(f"Expected exactly 1 board outline, found {len(board_outlines)}")
-        
+
+        # Validate board outline geometry
+        outline = board_outlines[0].outline
+        if outline is None:
+            raise IdfException("Board outline has no geometry")
+
+        # Validate polygon has sufficient points
+        if hasattr(outline, 'elements'):
+            num_elements = len(outline.elements)
+            if num_elements < 3:
+                logger.warning("Board outline has only %d elements (expected at least 3)", num_elements)
+
         return IdfFile(
             header=headers[0],
             board_outline=board_outlines[0].outline,
@@ -580,7 +661,7 @@ class IdfParser:
         )
 
 
-def find_refdes(idf_file: IdfFile, refdes: str) -> Optional[IdfPart]:
+def find_refdes(idf_file: IdfFile, refdes: str) -> IdfPart | None:
     """Find a component by reference designator"""
     for part in idf_file.placement:
         if part.refdes == refdes:
