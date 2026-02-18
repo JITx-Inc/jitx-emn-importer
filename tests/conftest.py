@@ -7,6 +7,15 @@ from pathlib import Path
 
 
 @pytest.fixture
+def real_emn_dir():
+    """Path to the directory containing real-world EMN test files"""
+    path = Path(__file__).parent / "fixtures" / "real_emn"
+    if not path.exists():
+        pytest.skip("Real EMN fixtures not available (unzip testEMNs.zip)")
+    return path
+
+
+@pytest.fixture
 def simple_emn_content():
     """Simple rectangular board EMN content in MM units"""
     return """.HEADER

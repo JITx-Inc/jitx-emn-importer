@@ -11,11 +11,12 @@ from jitx_emn_importer.emn_importer import (
     shape_to_python_code,
     determine_layer_set,
     convert_idf_to_layer_code,
+    convert_emn_to_jitx_features,
     generate_board_python_code,
     import_emn,
     import_emn_to_design_class,
 )
-from jitx_emn_importer.idf_parser import idf_parser, Polygon, Circle, Arc, ArcPolygon
+from jitx_emn_importer.idf_parser import idf_parser, IdfFile, IdfOutline, Polygon, Circle, Arc, ArcPolygon
 
 
 class TestSanitizeIdentifier:
@@ -314,3 +315,72 @@ class TestCompleteImport:
 
         # Verify valid Python
         ast.parse(content)
+
+
+class TestLayerAliases:
+    """Regression: Bug 2.6 — convert_emn_to_jitx_features must handle COMPONENT/SOLDER aliases"""
+
+    def _make_idf_with_keepout(self, layer_str):
+        """Helper: build an IdfFile with one route keepout on the given layer"""
+        outline = Polygon([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)])
+        from jitx_emn_importer.idf_parser import IdfHeader
+        header = IdfHeader("IDF_FILE", 3.0, "test", "2024", 1, "test", "MM")
+        keepout = IdfOutline(
+            owner="OWNER", ident=".ROUTE_KEEPOUT", thickness=0.0,
+            layers=layer_str, outline=outline, cutouts=[],
+        )
+        return IdfFile(
+            header=header,
+            board_outline=Polygon([(0, 0), (100, 0), (100, 50), (0, 50), (0, 0)]),
+            board_cutouts=(),
+            other_outlines=(),
+            route_outlines=(),
+            place_outlines=(),
+            route_keepouts=(keepout,),
+            via_keepouts=(),
+            place_keepouts=(),
+            holes=(),
+            notes=(),
+            placement=(),
+        )
+
+    def test_component_maps_to_top(self):
+        """COMPONENT layer alias should map to LayerSet(0) like TOP"""
+        idf = self._make_idf_with_keepout("COMPONENT")
+        features = convert_emn_to_jitx_features(idf)
+        # Should have one keepout feature
+        assert len(features) == 1
+        keepout = features[0]
+        assert str(keepout.layers) == "LayerSet(0)"
+
+    def test_solder_maps_to_bottom(self):
+        """SOLDER layer alias should map to LayerSet(-1) like BOTTOM"""
+        idf = self._make_idf_with_keepout("SOLDER")
+        features = convert_emn_to_jitx_features(idf)
+        assert len(features) == 1
+        keepout = features[0]
+        assert str(keepout.layers) == "LayerSet(-1)"
+
+
+class TestCircleCenterInCode:
+    """Regression: Bug 2.5 — shape_to_python_code must emit .at() for off-origin circles"""
+
+    def test_circle_with_center_emits_at(self):
+        """Circle with non-zero center should generate .at() call"""
+        circle = Circle(radius=5.0)
+        circle._center = (10.0, 20.0)
+        code = shape_to_python_code(circle)
+        assert ".at(10.0, 20.0)" in code
+
+    def test_circle_at_origin_no_at(self):
+        """Circle at origin should not generate .at() call"""
+        circle = Circle(radius=5.0)
+        circle._center = (0.0, 0.0)
+        code = shape_to_python_code(circle)
+        assert ".at" not in code
+
+    def test_circle_without_center_no_at(self):
+        """Circle without _center attribute should not generate .at() call"""
+        circle = Circle(radius=5.0)
+        code = shape_to_python_code(circle)
+        assert ".at" not in code

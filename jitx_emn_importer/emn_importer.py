@@ -154,6 +154,9 @@ def shape_to_python_code(shape: Any, var_name: str | None = None) -> str:
         class_name = shape.__class__.__name__
 
         if class_name == "Circle":
+            center = getattr(shape, '_center', None)
+            if center and (abs(center[0]) > 1e-10 or abs(center[1]) > 1e-10):
+                return f"Circle(radius={shape.radius}).at({center[0]}, {center[1]})"
             return f"Circle(radius={shape.radius})"
         elif class_name == "ArcPolygon":
             # ArcPolygon contains mixed Arc objects and point tuples
@@ -472,9 +475,9 @@ def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
     # Route keepouts (copper keepouts)
     for route_keepout in idf_file.route_keepouts:
         # Determine layers based on EMN layer specification
-        if route_keepout.layers.upper() == "TOP":
+        if route_keepout.layers.upper() in ("TOP", "COMPONENT"):
             layer_set = LayerSet(0)
-        elif route_keepout.layers.upper() == "BOTTOM":
+        elif route_keepout.layers.upper() in ("BOTTOM", "SOLDER"):
             layer_set = LayerSet(-1)
         else:
             layer_set = LayerSet.all()  # Default to all layers
@@ -542,7 +545,7 @@ def main():
     package_name = sys.argv[2]
     output_file = sys.argv[3]
 
-    if len(sys.argv) > 4 and sys.argv[4] == "--design-class":
+    if "--design-class" in sys.argv:
         import_emn_to_design_class(emn_file, package_name, output_file)
     else:
         import_emn(emn_file, package_name, output_file)

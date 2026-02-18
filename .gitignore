@@ -64,9 +64,11 @@ venv.bak/
 .LSOverride
 
 # Test artifacts
-*.emn
 test_*.py.bak
 test_output*.py
+
+# Real-world EMN test fixtures (not distributed with repo)
+tests/fixtures/real_emn/
 
 # JITX specific
 .socket.jitx
