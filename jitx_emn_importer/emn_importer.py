@@ -116,10 +116,10 @@ except ImportError:
 
 # Import parser with fallback
 try:
-    from .idf_parser import IdfFile, idf_parser
+    from .idf_parser import IdfFile, idf_parser, Circle as IdfCircle, Arc as IdfArc, Polygon as IdfPolygon, ArcPolygon as IdfArcPolygon
 except ImportError:
     # For standalone usage
-    from idf_parser import IdfFile, idf_parser  # type: ignore
+    from idf_parser import IdfFile, idf_parser, Circle as IdfCircle, Arc as IdfArc, Polygon as IdfPolygon, ArcPolygon as IdfArcPolygon  # type: ignore
 
 
 def sanitize_identifier(name: str) -> str:
@@ -144,52 +144,38 @@ def indent_text(text: str, levels: int = 1) -> str:
 
 
 def shape_to_python_code(shape: Any, var_name: str | None = None) -> str:
-    """Convert a JITX shape to Python code string
-
-    Note: ArcPolygon conversion is incomplete and will require manual editing.
-    ArcPolygon elements contain mixed Arc and point tuples which cannot be
-    easily serialized to Python code.
-    """
-    if hasattr(shape, '__class__'):
-        class_name = shape.__class__.__name__
-
-        if class_name == "Circle":
-            center = getattr(shape, '_center', None)
-            if center and (abs(center[0]) > 1e-10 or abs(center[1]) > 1e-10):
-                return f"Circle(radius={shape.radius}).at({center[0]}, {center[1]})"
-            return f"Circle(radius={shape.radius})"
-        elif class_name == "ArcPolygon":
-            # ArcPolygon contains mixed Arc objects and point tuples
-            elements_code = []
-            for elem in shape.elements:
-                if isinstance(elem, tuple):
-                    # Point tuple
-                    elements_code.append(f"({elem[0]}, {elem[1]})")
-                elif hasattr(elem, 'center') and hasattr(elem, 'radius'):
-                    # Arc object - serialize with center, radius, start_angle, sweep_angle
-                    center = elem.center
-                    elements_code.append(
-                        f"Arc(({center[0]}, {center[1]}), {elem.radius}, "
-                        f"{elem.start_angle}, {elem.sweep_angle})"
-                    )
-                else:
-                    # Unknown element type - add comment
-                    elements_code.append(f"# Unknown element: {type(elem).__name__}")
-            return f"ArcPolygon([{', '.join(elements_code)}])"
-        elif class_name == "Polygon" and hasattr(shape, 'elements'):
-            # JITX Polygon uses 'elements' parameter
-            elements_str = ', '.join([f"({p[0]}, {p[1]})" for p in shape.elements])
-            return f"Polygon([{elements_str}])"
-        elif hasattr(shape, 'elements') and shape.elements:
-            # Handle other shapes with elements - check if all are tuples
-            if all(isinstance(e, tuple) for e in shape.elements):
-                elements_str = ', '.join([f"({p[0]}, {p[1]})" for p in shape.elements])
-                return f"{class_name}([{elements_str}])"
+    """Convert a JITX shape to Python code string"""
+    if isinstance(shape, IdfCircle):
+        center = getattr(shape, '_center', None)
+        if center and (abs(center[0]) > 1e-10 or abs(center[1]) > 1e-10):
+            return f"Circle(radius={shape.radius}).at({center[0]}, {center[1]})"
+        return f"Circle(radius={shape.radius})"
+    elif isinstance(shape, IdfArcPolygon):
+        elements_code = []
+        for elem in shape.elements:
+            if isinstance(elem, tuple):
+                elements_code.append(f"({elem[0]}, {elem[1]})")
+            elif isinstance(elem, IdfArc):
+                center = elem.center
+                elements_code.append(
+                    f"Arc(({center[0]}, {center[1]}), {elem.radius}, "
+                    f"{elem.start_angle}, {elem.sweep_angle})"
+                )
             else:
-                # Complex shape with non-tuple elements
-                return f"{class_name}([])  # TODO: Complex shape - manual editing required"
+                elements_code.append(f"# Unknown element: {type(elem).__name__}")
+        return f"ArcPolygon([{', '.join(elements_code)}])"
+    elif isinstance(shape, IdfPolygon):
+        elements_str = ', '.join([f"({p[0]}, {p[1]})" for p in shape.elements])
+        return f"Polygon([{elements_str}])"
+    elif hasattr(shape, 'elements') and shape.elements:
+        class_name = shape.__class__.__name__
+        if all(isinstance(e, tuple) for e in shape.elements):
+            elements_str = ', '.join([f"({p[0]}, {p[1]})" for p in shape.elements])
+            return f"{class_name}([{elements_str}])"
         else:
-            return f"{class_name}()"  # fallback
+            return f"{class_name}([])  # TODO: Complex shape - manual editing required"
+    elif hasattr(shape, '__class__'):
+        return f"{shape.__class__.__name__}()"
     else:
         return str(shape)
 
@@ -526,29 +512,28 @@ def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
 
 def main():
     """Command-line interface for EMN/IDF importer"""
-    import sys
+    import argparse
 
-    if len(sys.argv) < 4:
-        print("Usage: python -m jitx_emn_importer.emn_importer <emn_file> <package_name> <output_file> [--design-class]")
-        print("  or: emn-import <emn_file> <package_name> <output_file> [--design-class]")
-        print("")
-        print("Arguments:")
-        print("  emn_file      : Path to the EMN/IDF/BDF file to import")
-        print("  package_name  : Name for the generated package/class")
-        print("  output_file   : Output Python file path")
-        print("")
-        print("Options:")
-        print("  --design-class: Generate a complete Design class instead of just helper functions")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        prog="emn-import",
+        description="Import EMN/IDF/BDF files and generate JITX Python code",
+    )
+    parser.add_argument("emn_file", help="Path to the EMN/IDF/BDF file to import")
+    parser.add_argument("package_name", help="Name for the generated package/class")
+    parser.add_argument("output_file", help="Output Python file path")
+    parser.add_argument(
+        "--design-class",
+        action="store_true",
+        dest="design_class",
+        help="Generate a complete Design class instead of just helper functions",
+    )
 
-    emn_file = sys.argv[1]
-    package_name = sys.argv[2]
-    output_file = sys.argv[3]
+    args = parser.parse_args()
 
-    if "--design-class" in sys.argv:
-        import_emn_to_design_class(emn_file, package_name, output_file)
+    if args.design_class:
+        import_emn_to_design_class(args.emn_file, args.package_name, args.output_file)
     else:
-        import_emn(emn_file, package_name, output_file)
+        import_emn(args.emn_file, args.package_name, args.output_file)
 
 
 if __name__ == "__main__":
