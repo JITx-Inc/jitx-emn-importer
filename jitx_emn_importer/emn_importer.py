@@ -12,114 +12,14 @@ import re
 from typing import Any
 from io import StringIO
 
+from jitx.shapes.primitive import Circle, Text
+from jitx.feature import Cutout, KeepOut, Custom
+from jitx.layerindex import LayerSet, Side
+from jitx.anchor import Anchor
+
+from .idf_parser import IdfFile, idf_parser
+
 logger = logging.getLogger(__name__)
-
-# Type hints for JITX classes (will be imported or mocked)
-Circle = Any
-Text = Any
-Cutout = Any
-KeepOut = Any
-Custom = Any
-LayerSet = Any
-Side = Any
-Anchor = Any
-
-# Try to import JITX Python classes, fall back to mocks if not available
-try:
-    from jitx.shapes.primitive import Circle, Text  # type: ignore
-    from jitx.feature import Cutout, KeepOut, Custom  # type: ignore
-    from jitx.layerindex import LayerSet, Side  # type: ignore
-    from jitx.anchor import Anchor  # type: ignore
-    JITX_AVAILABLE = True
-except ImportError:
-    # Mock classes for when JITX Python is not available
-    JITX_AVAILABLE = False
-
-    class _PositionedShape:
-        """Mock positioned shape that tracks location"""
-        def __init__(self, shape: Any, x: float, y: float):
-            self.shape = shape
-            self.x = x
-            self.y = y
-
-        def __repr__(self) -> str:
-            return f"{self.shape!r}.at({self.x}, {self.y})"
-
-    class Circle:  # type: ignore
-        def __init__(self, radius: float):
-            self.radius = radius
-
-        def at(self, x: float, y: float) -> _PositionedShape:
-            return _PositionedShape(self, x, y)
-
-        def __repr__(self) -> str:
-            return f"Circle(radius={self.radius})"
-
-    class Text:  # type: ignore
-        def __init__(self, text: str, size: float = 1.0, anchor: Any = None):
-            self.text = text
-            self.size = size
-            self.anchor = anchor
-
-        def at(self, x: float, y: float) -> _PositionedShape:
-            return _PositionedShape(self, x, y)
-
-        def __repr__(self) -> str:
-            anchor_str = f'Anchor.{self.anchor}' if isinstance(self.anchor, str) else self.anchor
-            return f'Text("{self.text}", size={self.size}, anchor={anchor_str})'
-
-    class Cutout:  # type: ignore
-        def __init__(self, shape: Any):
-            self.shape = shape
-
-        def __repr__(self) -> str:
-            return f"Cutout({self.shape!r})"
-
-    class KeepOut:  # type: ignore
-        def __init__(self, shape: Any, layers: Any = None, pour: bool = False, via: bool = False):
-            self.shape = shape
-            self.layers = layers
-            self.pour = pour
-            self.via = via
-
-        def __repr__(self) -> str:
-            return f"KeepOut({self.shape!r}, layers={self.layers!r}, pour={self.pour}, via={self.via})"
-
-    class Custom:  # type: ignore
-        def __init__(self, shape: Any, name: str = "Custom"):
-            self.shape = shape
-            self.name = name
-
-        def __repr__(self) -> str:
-            return f'Custom({self.shape!r}, name="{self.name}")'
-
-    class LayerSet:  # type: ignore
-        def __init__(self, *args: Any):
-            self.layers = args
-
-        @classmethod
-        def all(cls) -> 'LayerSet':
-            return cls("ALL")
-
-        def __repr__(self) -> str:
-            if len(self.layers) == 1 and self.layers[0] == "ALL":
-                return "LayerSet.all()"
-            return f"LayerSet({', '.join(map(str, self.layers))})"
-
-    class Side:  # type: ignore
-        Top = "Top"
-        Bottom = "Bottom"
-
-    class Anchor:  # type: ignore
-        SW = "SW"
-        C = "C"
-
-# Import parser with fallback
-try:
-    from .idf_parser import IdfFile, idf_parser
-except ImportError:
-    # For standalone usage
-    from idf_parser import IdfFile, idf_parser  # type: ignore
 
 
 def sanitize_identifier(name: str) -> str:
@@ -163,11 +63,11 @@ def shape_to_python_code(shape: Any, var_name: str | None = None) -> str:
                     # Point tuple
                     elements_code.append(f"({elem[0]}, {elem[1]})")
                 elif hasattr(elem, 'center') and hasattr(elem, 'radius'):
-                    # Arc object - serialize with center, radius, start_angle, sweep_angle
+                    # Arc object - serialize with center, radius, start, arc
                     center = elem.center
                     elements_code.append(
                         f"Arc(({center[0]}, {center[1]}), {elem.radius}, "
-                        f"{elem.start_angle}, {elem.sweep_angle})"
+                        f"{elem.start}, {elem.arc})"
                     )
                 else:
                     # Unknown element type - add comment

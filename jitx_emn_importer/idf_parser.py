@@ -10,44 +10,10 @@ Port from Stanza idf-parser.stanza to Python for use with JITX Python API.
 from dataclasses import dataclass
 import logging
 import math
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Try to import JITX Python classes, fall back to mocks if not available
-try:
-    from jitx.shapes.primitive import Circle, Arc, Polygon, ArcPolygon  # type: ignore
-    JITX_AVAILABLE = True
-except ImportError:
-    # Mock geometry classes for when JITX Python is not available
-    JITX_AVAILABLE = False
-
-    class Circle:  # type: ignore
-        def __init__(self, radius: float):
-            self.radius = radius
-        def __repr__(self) -> str:
-            return f"Circle(radius={self.radius})"
-
-    class Arc:  # type: ignore
-        def __init__(self, center: tuple[float, float], radius: float, start_angle: float, sweep_angle: float):
-            self.center = center
-            self.radius = radius
-            self.start_angle = start_angle
-            self.sweep_angle = sweep_angle
-        def __repr__(self) -> str:
-            return f"Arc(center={self.center}, radius={self.radius}, start={self.start_angle}, sweep={self.sweep_angle})"
-
-    class Polygon:  # type: ignore
-        def __init__(self, elements: list[tuple[float, float]]):
-            self.elements = elements
-        def __repr__(self) -> str:
-            return f"Polygon({len(self.elements)} points)"
-
-    class ArcPolygon:  # type: ignore
-        def __init__(self, elements: list[Any]):
-            self.elements = elements
-        def __repr__(self) -> str:
-            return f"ArcPolygon({len(self.elements)} elements)"
+from jitx.shapes.primitive import Circle, Arc, Polygon, ArcPolygon
 
 
 class IdfException(Exception):

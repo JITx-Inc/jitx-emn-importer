@@ -12,6 +12,9 @@ license = {text = "MIT"}
 authors = [
     {name = "JITX Inc."}
 ]
+dependencies = [
+    "jitx>=4.0",
+]
 keywords = ["jitx", "pcb", "eda", "emn", "idf", "bdf", "mechanical", "import"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
