@@ -2,9 +2,8 @@
 EMN/IDF Importer for JITX Python
 
 High-level import interface that converts parsed IDF data to JITX Python-compatible
-layer specifications and generates Python code for board definitions.
-
-Port from Stanza emn-importer.stanza to Python for use with JITX Python API.
+board definitions. Generates complete Board + Circuit + Design classes from EMN/IDF
+mechanical data.
 """
 
 import logging
@@ -21,16 +20,27 @@ from .idf_parser import IdfFile, idf_parser
 
 logger = logging.getLogger(__name__)
 
+# Coordinate precision for generated code (decimal places)
+_PRECISION = 4
+
+
+def _fmt(value: float) -> str:
+    """Format a float for code generation: round and strip trailing zeros."""
+    rounded = round(value, _PRECISION)
+    # Use 'g' format to strip trailing zeros, but ensure at least one decimal
+    s = f"{rounded:.{_PRECISION}f}".rstrip("0").rstrip(".")
+    # Ensure there's always a decimal point for float literals
+    if "." not in s:
+        s += ".0"
+    return s
+
 
 def sanitize_identifier(name: str) -> str:
     """Sanitize a string to be a valid Python identifier"""
-    # If it starts with a letter or underscore, use as-is
     if name and (name[0].isalpha() or name[0] == "_"):
-        # Replace invalid characters with underscores
         sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
         return sanitized
     else:
-        # Prepend underscore if it doesn't start with letter/underscore
         sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
         return f"_{sanitized}"
 
@@ -43,40 +53,73 @@ def indent_text(text: str, levels: int = 1) -> str:
     return "\n".join(indented_lines)
 
 
-def shape_to_python_code(shape: Any, var_name: str | None = None) -> str:
-    """Convert a JITX shape to Python code string"""
+def _point_to_code(p: tuple) -> str:
+    """Format a point tuple for code generation."""
+    return f"({_fmt(p[0])}, {_fmt(p[1])})"
+
+
+def _arc_to_code(arc: Arc) -> str:
+    """Format an Arc for code generation."""
+    c = arc.center
+    return (
+        f"Arc(({_fmt(c[0])}, {_fmt(c[1])}), {_fmt(arc.radius)}, {_fmt(arc.start)}, {_fmt(arc.arc)})"
+    )
+
+
+def shape_to_python_code(shape: Any) -> str:
+    """Convert a JITX shape to a single-line Python code string."""
     if isinstance(shape, Circle):
         center = getattr(shape, "_center", None)
         if center and (abs(center[0]) > 1e-10 or abs(center[1]) > 1e-10):
-            return f"Circle(radius={shape.radius}).at({center[0]}, {center[1]})"
-        return f"Circle(radius={shape.radius})"
+            return f"Circle(radius={_fmt(shape.radius)}).at({_fmt(center[0])}, {_fmt(center[1])})"
+        return f"Circle(radius={_fmt(shape.radius)})"
     elif isinstance(shape, ArcPolygon):
-        elements_code = []
+        parts = []
         for elem in shape.elements:
             if isinstance(elem, tuple):
-                elements_code.append(f"({elem[0]}, {elem[1]})")
+                parts.append(_point_to_code(elem))
             elif isinstance(elem, Arc):
-                center = elem.center
-                elements_code.append(
-                    f"Arc(({center[0]}, {center[1]}), {elem.radius}, {elem.start}, {elem.arc})"
-                )
+                parts.append(_arc_to_code(elem))
             else:
-                elements_code.append(f"# Unknown element: {type(elem).__name__}")
-        return f"ArcPolygon([{', '.join(elements_code)}])"
+                parts.append(f"# Unknown: {type(elem).__name__}")
+        return f"ArcPolygon([{', '.join(parts)}])"
     elif isinstance(shape, Polygon):
-        elements_str = ", ".join([f"({p[0]}, {p[1]})" for p in shape.elements])
+        elements_str = ", ".join(_point_to_code(p) for p in shape.elements)
         return f"Polygon([{elements_str}])"
-    elif hasattr(shape, "elements") and shape.elements:
-        class_name = shape.__class__.__name__
-        if all(isinstance(e, tuple) for e in shape.elements):
-            elements_str = ", ".join([f"({p[0]}, {p[1]})" for p in shape.elements])
-            return f"{class_name}([{elements_str}])"
-        else:
-            return f"{class_name}([])  # TODO: Complex shape - manual editing required"
     elif hasattr(shape, "__class__"):
         return f"{shape.__class__.__name__}()"
     else:
         return str(shape)
+
+
+def shape_to_multiline_code(shape: Any, indent: int = 0) -> str:
+    """Convert a JITX shape to multi-line Python code, one element per line."""
+    prefix = "    " * indent
+
+    if isinstance(shape, Circle):
+        center = getattr(shape, "_center", None)
+        if center and (abs(center[0]) > 1e-10 or abs(center[1]) > 1e-10):
+            return f"Circle(radius={_fmt(shape.radius)}).at({_fmt(center[0])}, {_fmt(center[1])})"
+        return f"Circle(radius={_fmt(shape.radius)})"
+    elif isinstance(shape, ArcPolygon):
+        lines = ["ArcPolygon(["]
+        for elem in shape.elements:
+            if isinstance(elem, tuple):
+                lines.append(f"{prefix}    {_point_to_code(elem)},")
+            elif isinstance(elem, Arc):
+                lines.append(f"{prefix}    {_arc_to_code(elem)},")
+            else:
+                lines.append(f"{prefix}    # Unknown: {type(elem).__name__}")
+        lines.append(f"{prefix}])")
+        return "\n".join(lines)
+    elif isinstance(shape, Polygon):
+        lines = ["Polygon(["]
+        for p in shape.elements:
+            lines.append(f"{prefix}    {_point_to_code(p)},")
+        lines.append(f"{prefix}])")
+        return "\n".join(lines)
+    else:
+        return shape_to_python_code(shape)
 
 
 def determine_layer_set(layers_str: str) -> str:
@@ -88,250 +131,173 @@ def determine_layer_set(layers_str: str) -> str:
     elif layers_str.upper() in ["BOTTOM", "SOLDER"]:
         return "LayerSet(-1)"
     else:
-        # Default to all layers for unknown specifications
         return "LayerSet.all()"
 
 
-def convert_idf_to_layer_code(idf: IdfFile) -> tuple[list[str], list[str]]:
+def _generate_feature_code(idf: IdfFile) -> dict[str, list[str]]:
+    """Generate categorized feature code strings from IDF data.
+
+    Returns a dict with keys: cutouts, route_keepouts, via_keepouts,
+    place_keepouts, notes, placement. Each value is a list of Python
+    code strings (one per feature, no leading indent).
     """
-    Convert IDF data structures to JITX layer specification code.
-    Returns tuple of (layer_statements, variable_definitions)
-    """
-    layer_statements = []
-    variable_definitions = []
+    result: dict[str, list[str]] = {
+        "cutouts": [],
+        "route_keepouts": [],
+        "via_keepouts": [],
+        "place_keepouts": [],
+        "notes": [],
+        "placement": [],
+    }
 
     # Board cutouts
     for cutout in idf.board_cutouts:
         shape_code = shape_to_python_code(cutout)
-        layer_statements.append(f"layer(Cutout({shape_code}))")
+        result["cutouts"].append(f"Cutout({shape_code})")
 
     # Holes as cutouts
     for hole in idf.holes:
-        layer_statements.append(
-            f"layer(Cutout(Circle(radius={hole.dia * 0.5}).at({hole.x}, {hole.y})))"
-        )
+        r = _fmt(hole.dia * 0.5)
+        result["cutouts"].append(f"Cutout(Circle(radius={r}).at({_fmt(hole.x)}, {_fmt(hole.y)}))")
 
-    # Route keepouts (copper keepouts)
+    # Route keepouts
     for keepout in idf.route_keepouts:
         layer_set = determine_layer_set(keepout.layers)
         shape_code = shape_to_python_code(keepout.outline)
-        layer_statements.append(
-            f"layer(KeepOut({shape_code}, layers={layer_set}, pour=True, via=False))"
+        result["route_keepouts"].append(
+            f"KeepOut({shape_code}, layers={layer_set}, pour=True, via=False)"
         )
 
     # Via keepouts
     for keepout in idf.via_keepouts:
         shape_code = shape_to_python_code(keepout.outline)
-        layer_statements.append(
-            f"layer(KeepOut({shape_code}, layers=LayerSet.all(), pour=False, via=True))"
+        result["via_keepouts"].append(
+            f"KeepOut({shape_code}, layers=LayerSet.all(), pour=False, via=True)"
         )
 
-    # Place keepouts as custom layers
+    # Place keepouts
     for keepout in idf.place_keepouts:
         shape_code = shape_to_python_code(keepout.outline)
-        layer_statements.append(f'layer(Custom({shape_code}, name="Placement Keepout"))')
+        result["place_keepouts"].append(f'Custom({shape_code}, name="Placement Keepout")')
 
-    # Notes as custom text layers
+    # Notes
     for note in idf.notes:
-        # Clean up text by removing control characters
         text = note.text.replace(chr(1), "").replace(chr(2), "")
-        # Escape quotes in text
         text_escaped = text.replace('"', '\\"')
-        text_shape = f'Text("{text_escaped}", size={note.height}, anchor=Anchor.SW)'
-        text_at = f"{text_shape}.at({note.x}, {note.y})"
-        layer_statements.append(f'layer(Custom({text_at}, name="Assembly Notes"))')
+        h = _fmt(note.height)
+        x = _fmt(note.x)
+        y = _fmt(note.y)
+        result["notes"].append(
+            f'Custom(Text("{text_escaped}", size={h}, anchor=Anchor.SW).at({x}, {y}),'
+            f' name="Assembly Notes")'
+        )
 
-    # Placement as custom text markers
+    # Placement markers
     for part in idf.placement:
         ref_escaped = part.refdes.replace('"', '\\"')
-        text_shape = f'Text("{ref_escaped}", size=1.0, anchor=Anchor.C)'
-        text_at = f"{text_shape}.at({part.x}, {part.y})"
-        layer_statements.append(f'layer(Custom({text_at}, name="Component Placement"))')
+        x = _fmt(part.x)
+        y = _fmt(part.y)
+        result["placement"].append(
+            f'Custom(Text("{ref_escaped}", size=1.0, anchor=Anchor.C).at({x}, {y}),'
+            f' name="Component Placement")'
+        )
 
-    return layer_statements, variable_definitions
+    return result
 
 
-def generate_board_python_code(idf: IdfFile, package_name: str) -> str:
-    """Generate Python code for a JITX board definition"""
-
-    # Sanitize package name
-    clean_package = sanitize_identifier(package_name)
-
-    # Generate layer code
-    layer_statements, variable_definitions = convert_idf_to_layer_code(idf)
-
-    # Start building the output
-    output = StringIO()
-
-    # Header
-    output.write(f'''"""
-Generated JITX Python board definition from EMN/IDF import
-Package: {clean_package}
-"""
-
-from jitx import *
-from jitx.shapes.primitive import Arc, Circle, Text, Polygon, ArcPolygon
-from jitx.feature import Cutout, KeepOut, Custom
-from jitx.layerindex import LayerSet, Side
-from jitx.anchor import Anchor
-
-''')
-
-    # Variable definitions if any
-    if variable_definitions:
-        output.write("# Shape definitions\n")
-        for var_def in variable_definitions:
-            output.write(f"{var_def}\n")
-        output.write("\n")
-
-    # Board outline
-    output.write("# Board outline shape\n")
-    board_outline_code = shape_to_python_code(idf.board_outline)
-    output.write(f"emn_board_outline = {board_outline_code}\n\n")
-
-    # EMN module function
-    output.write("def emn_module():\n")
-    output.write('    """Generated mechanical data from EMN/IDF import"""\n')
-
-    if layer_statements:
-        for statement in layer_statements:
-            output.write(f"    {statement}\n")
+def _write_feature_list(output: StringIO, items: list[str], attr_name: str, indent: str) -> None:
+    """Write a list of feature code strings as a self.attr assignment."""
+    if not items:
+        return
+    if len(items) == 1:
+        output.write(f"{indent}self.{attr_name} = [{items[0]}]\n")
     else:
-        output.write("    # No mechanical features found\n")
-        output.write("    pass\n")
-
-    output.write("\n")
-
-    # Example usage
-    output.write("# Example usage in a JITX design:\n")
-    output.write("# \n")
-    output.write("# from jitx.board import Board\n")
-    output.write("# from jitx.circuit import Circuit\n")
-    output.write("# from jitx.design import Design\n")
-    output.write("# \n")
-    output.write("# class MyBoard(Board):\n")
-    output.write("#     shape = emn_board_outline\n")
-    output.write("# \n")
-    output.write("# class MyCircuit(Circuit):\n")
-    output.write("#     def __init__(self):\n")
-    output.write("#         super().__init__()\n")
-    output.write("#         emn_module()  # Add mechanical features\n")
-    output.write("# \n")
-    output.write("# class MyDesign(Design):\n")
-    output.write("#     board = MyBoard()\n")
-    output.write("#     circuit = MyCircuit()\n")
-
-    return output.getvalue()
+        output.write(f"{indent}self.{attr_name} = [\n")
+        for item in items:
+            output.write(f"{indent}    {item},\n")
+        output.write(f"{indent}]\n")
 
 
-def import_emn(emn_filename: str, package_name: str, output_filename: str) -> None:
+def import_emn(emn_filename: str, class_name: str, output_filename: str) -> None:
     """
-    Import EMN/IDF file and generate Python code for JITX
+    Import EMN/IDF file and generate a complete JITX Design (Board + Circuit + Design).
 
     Args:
         emn_filename: Path to the EMN/IDF file to import
-        package_name: Name for the generated package
+        class_name: Name prefix for the generated classes
         output_filename: Output Python file path
     """
-
-    # Parse the IDF file
     idf = idf_parser(emn_filename)
-
-    # Generate Python code
-    python_code = generate_board_python_code(idf, package_name)
-
-    # Write to file
-    with open(output_filename, "w") as f:
-        f.write(python_code)
-
-    logger.info("Successfully imported %s to %s", emn_filename, output_filename)
-    logger.info("Package name: %s", package_name)
-    logger.info("Board outline: %s", type(idf.board_outline).__name__)
-    logger.info(
-        "Features: %d cutouts, %d holes, %d notes, %d parts",
-        len(idf.board_cutouts),
-        len(idf.holes),
-        len(idf.notes),
-        len(idf.placement),
-    )
-
-
-def import_emn_to_design_class(emn_filename: str, class_name: str, output_filename: str) -> None:
-    """
-    Import EMN/IDF file and generate a complete JITX Design class
-
-    Args:
-        emn_filename: Path to the EMN/IDF file to import
-        class_name: Name for the generated Design class
-        output_filename: Output Python file path
-    """
-
-    # Parse the IDF file
-    idf = idf_parser(emn_filename)
-
-    # Sanitize class name
     clean_class = sanitize_identifier(class_name)
+    features = _generate_feature_code(idf)
 
-    # Generate layer code
-    layer_statements, variable_definitions = convert_idf_to_layer_code(idf)
-
-    # Start building the output
     output = StringIO()
 
-    # Header
-    output.write(f'''"""
-Generated JITX Python Design from EMN/IDF import
-Design: {clean_class}
-"""
+    # Header and imports
+    output.write(f'"""\nGenerated JITX Design from EMN/IDF import: {clean_class}\n"""\n\n')
+    output.write("from jitx.anchor import Anchor\n")
+    output.write("from jitx.board import Board\n")
+    output.write("from jitx.circuit import Circuit\n")
+    output.write("from jitx.design import Design\n")
+    output.write("from jitx.feature import Custom, Cutout, KeepOut\n")
+    output.write("from jitx.layerindex import LayerSet\n")
+    output.write("from jitx.shapes.primitive import Arc, ArcPolygon, Circle, Polygon, Text\n")
+    output.write("\n\n")
 
-from jitx import *
-from jitx.shapes.primitive import Arc, Circle, Text, Polygon, ArcPolygon
-from jitx.feature import Cutout, KeepOut, Custom
-from jitx.layerindex import LayerSet, Side
-from jitx.anchor import Anchor
-from jitx.board import Board
-from jitx.design import Design
-from jitx.circuit import Circuit
-
-''')
-
-    # Variable definitions if any
-    if variable_definitions:
-        output.write("# Shape definitions\n")
-        for var_def in variable_definitions:
-            output.write(f"{var_def}\n")
-        output.write("\n")
-
-    # Board class
-    board_outline_code = shape_to_python_code(idf.board_outline)
+    # Board class with multi-line shape
     output.write(f"class {clean_class}Board(Board):\n")
-    output.write('    """Board definition from EMN/IDF import"""\n')
-    output.write(f"    shape = {board_outline_code}\n\n")
+    shape_code = shape_to_multiline_code(idf.board_outline, indent=1)
+    output.write(f"    shape = {shape_code}\n")
+    output.write("\n\n")
 
-    # Circuit class with mechanical features
+    # Circuit class with categorized features
     output.write(f"class {clean_class}Circuit(Circuit):\n")
-    output.write('    """Main circuit with mechanical features from EMN/IDF"""\n')
-    output.write("    \n")
     output.write("    def __init__(self):\n")
     output.write("        super().__init__()\n")
 
-    if layer_statements:
-        output.write("        # Mechanical features from EMN/IDF\n")
-        for statement in layer_statements:
-            output.write(f"        {statement}\n")
-    else:
-        output.write("        # No mechanical features found\n")
-        output.write("        pass\n")
+    ind = "        "
+    has_features = False
 
-    output.write("\n")
+    if features["cutouts"]:
+        output.write(f"\n{ind}# Board cutouts and drilled holes\n")
+        _write_feature_list(output, features["cutouts"], "cutouts", ind)
+        has_features = True
+
+    if features["route_keepouts"]:
+        output.write(f"\n{ind}# Route keepouts (copper pour restrictions)\n")
+        _write_feature_list(output, features["route_keepouts"], "route_keepouts", ind)
+        has_features = True
+
+    if features["via_keepouts"]:
+        output.write(f"\n{ind}# Via keepouts\n")
+        _write_feature_list(output, features["via_keepouts"], "via_keepouts", ind)
+        has_features = True
+
+    if features["place_keepouts"]:
+        output.write(f"\n{ind}# Placement keepouts\n")
+        _write_feature_list(output, features["place_keepouts"], "place_keepouts", ind)
+        has_features = True
+
+    if features["notes"]:
+        output.write(f"\n{ind}# Assembly notes\n")
+        _write_feature_list(output, features["notes"], "notes", ind)
+        has_features = True
+
+    if features["placement"]:
+        output.write(f"\n{ind}# Component placement markers\n")
+        _write_feature_list(output, features["placement"], "placement_markers", ind)
+        has_features = True
+
+    if not has_features:
+        output.write(f"{ind}pass\n")
+
+    output.write("\n\n")
 
     # Design class
     output.write(f"class {clean_class}Design(Design):\n")
-    output.write('    """Complete design from EMN/IDF import"""\n')
     output.write(f"    board = {clean_class}Board()\n")
     output.write(f"    circuit = {clean_class}Circuit()\n")
 
-    # Write to file
     with open(output_filename, "w") as f:
         f.write(output.getvalue())
 
@@ -349,7 +315,7 @@ from jitx.circuit import Circuit
 
 def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
     """
-    Convert parsed EMN data to actual JITX feature objects (not just code strings).
+    Convert parsed EMN data to actual JITX feature objects (not code strings).
     This can be used for direct programmatic access to the features.
     """
     features = []
@@ -367,13 +333,12 @@ def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
 
     # Route keepouts (copper keepouts)
     for route_keepout in idf_file.route_keepouts:
-        # Determine layers based on EMN layer specification
         if route_keepout.layers.upper() in ("TOP", "COMPONENT"):
             layer_set = LayerSet(0)
         elif route_keepout.layers.upper() in ("BOTTOM", "SOLDER"):
             layer_set = LayerSet(-1)
         else:
-            layer_set = LayerSet.all()  # Default to all layers
+            layer_set = LayerSet.all()
 
         features.append(KeepOut(route_keepout.outline, layers=layer_set, pour=True, via=False))
 
@@ -382,26 +347,25 @@ def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
         features.append(
             KeepOut(
                 via_keepout.outline,
-                layers=LayerSet.all(),  # Via keepouts span all layers
+                layers=LayerSet.all(),
                 pour=False,
                 via=True,
             )
         )
 
-    # Place keepouts as custom layers
+    # Place keepouts
     for place_keepout in idf_file.place_keepouts:
         features.append(Custom(place_keepout.outline, name="Placement Keepout"))
 
-    # Notes as custom text layers
+    # Notes
     for note in idf_file.notes:
-        # Clean up text by removing control characters
         text = note.text.replace(chr(1), "").replace(chr(2), "")
         text_shape = Text(text, size=note.height, anchor=Anchor.SW)
         if hasattr(text_shape, "at"):
             text_shape = text_shape.at(note.x, note.y)
         features.append(Custom(text_shape, name="Assembly Notes"))
 
-    # Placement information as custom markers
+    # Placement markers
     for part in idf_file.placement:
         marker_text = Text(part.refdes, size=1.0, anchor=Anchor.C)
         if hasattr(marker_text, "at"):
@@ -420,21 +384,11 @@ def main():
         description="Import EMN/IDF/BDF files and generate JITX Python code",
     )
     parser.add_argument("emn_file", help="Path to the EMN/IDF/BDF file to import")
-    parser.add_argument("package_name", help="Name for the generated package/class")
+    parser.add_argument("class_name", help="Name prefix for the generated classes")
     parser.add_argument("output_file", help="Output Python file path")
-    parser.add_argument(
-        "--design-class",
-        action="store_true",
-        dest="design_class",
-        help="Generate a complete Design class instead of just helper functions",
-    )
 
     args = parser.parse_args()
-
-    if args.design_class:
-        import_emn_to_design_class(args.emn_file, args.package_name, args.output_file)
-    else:
-        import_emn(args.emn_file, args.package_name, args.output_file)
+    import_emn(args.emn_file, args.class_name, args.output_file)
 
 
 if __name__ == "__main__":
