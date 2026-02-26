@@ -2,21 +2,28 @@
 Pytest unit tests for emn_importer module
 """
 
-import pytest
 import ast
-from pathlib import Path
+
 from jitx_emn_importer.emn_importer import (
-    sanitize_identifier,
-    indent_text,
-    shape_to_python_code,
-    determine_layer_set,
-    convert_idf_to_layer_code,
     convert_emn_to_jitx_features,
+    convert_idf_to_layer_code,
+    determine_layer_set,
     generate_board_python_code,
     import_emn,
     import_emn_to_design_class,
+    indent_text,
+    sanitize_identifier,
+    shape_to_python_code,
 )
-from jitx_emn_importer.idf_parser import idf_parser, IdfFile, IdfOutline, Polygon, Circle, Arc, ArcPolygon
+from jitx_emn_importer.idf_parser import (
+    Arc,
+    ArcPolygon,
+    Circle,
+    IdfFile,
+    IdfOutline,
+    Polygon,
+    idf_parser,
+)
 
 
 class TestSanitizeIdentifier:
@@ -64,7 +71,7 @@ class TestIndentText:
     def test_empty_lines(self):
         """Test that empty lines are not indented"""
         result = indent_text("line1\n\nline2", 1)
-        lines = result.split('\n')
+        lines = result.split("\n")
         assert lines[0] == "    line1"
         assert lines[1] == ""  # Empty line should not be indented
         assert lines[2] == "    line2"
@@ -324,10 +331,15 @@ class TestLayerAliases:
         """Helper: build an IdfFile with one route keepout on the given layer"""
         outline = Polygon([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)])
         from jitx_emn_importer.idf_parser import IdfHeader
+
         header = IdfHeader("IDF_FILE", 3.0, "test", "2024", 1, "test", "MM")
         keepout = IdfOutline(
-            owner="OWNER", ident=".ROUTE_KEEPOUT", thickness=0.0,
-            layers=layer_str, outline=outline, cutouts=[],
+            owner="OWNER",
+            ident=".ROUTE_KEEPOUT",
+            thickness=0.0,
+            layers=layer_str,
+            outline=outline,
+            cutouts=[],
         )
         return IdfFile(
             header=header,
@@ -351,7 +363,7 @@ class TestLayerAliases:
         # Should have one keepout feature
         assert len(features) == 1
         keepout = features[0]
-        assert str(keepout.layers) == "LayerSet(0)"
+        assert list(keepout.layers.ranges) == [(0, 0)]
 
     def test_solder_maps_to_bottom(self):
         """SOLDER layer alias should map to LayerSet(-1) like BOTTOM"""
@@ -359,7 +371,7 @@ class TestLayerAliases:
         features = convert_emn_to_jitx_features(idf)
         assert len(features) == 1
         keepout = features[0]
-        assert str(keepout.layers) == "LayerSet(-1)"
+        assert list(keepout.layers.ranges) == [(-1, -1)]
 
 
 class TestCircleCenterInCode:

@@ -2,15 +2,10 @@
 Pytest unit tests for geometry calculations in idf_parser
 """
 
-import pytest
 import math
+
 from jitx_emn_importer.idf_parser import (
     IdfParser,
-    LoopPoint,
-    Circle,
-    Arc,
-    Polygon,
-    ArcPolygon,
 )
 
 
@@ -42,11 +37,11 @@ IDF_FILE 3.0 "Test" "2024-01-01" 1 "Test" "MM"
         assert idf.board_outline.__class__.__name__ == "ArcPolygon"
 
         # Find the arc in elements
-        arcs = [e for e in idf.board_outline.elements if hasattr(e, 'sweep_angle')]
+        arcs = [e for e in idf.board_outline.elements if hasattr(e, "arc")]
         assert len(arcs) >= 1
 
         arc = arcs[0]
-        assert abs(arc.sweep_angle - 90.0) < 0.01
+        assert abs(arc.arc - 90.0) < 0.01
 
     def test_180_degree_arc(self, tmp_path):
         """Test 180-degree arc (semicircle) calculation"""
@@ -72,11 +67,11 @@ IDF_FILE 3.0 "Test" "2024-01-01" 1 "Test" "MM"
         # Should produce ArcPolygon with semicircular arc
         assert idf.board_outline.__class__.__name__ == "ArcPolygon"
 
-        arcs = [e for e in idf.board_outline.elements if hasattr(e, 'sweep_angle')]
+        arcs = [e for e in idf.board_outline.elements if hasattr(e, "arc")]
         assert len(arcs) >= 1
 
         arc = arcs[0]
-        assert abs(arc.sweep_angle - 180.0) < 0.01
+        assert abs(arc.arc - 180.0) < 0.01
 
     def test_negative_sweep_arc(self, tmp_path):
         """Test negative sweep angle (clockwise arc)"""
@@ -98,13 +93,13 @@ IDF_FILE 3.0 "Test" "2024-01-01" 1 "Test" "MM"
         parser = IdfParser(str(emn_file))
         idf = parser.parse()
 
-        arcs = [e for e in idf.board_outline.elements if hasattr(e, 'sweep_angle')]
+        arcs = [e for e in idf.board_outline.elements if hasattr(e, "arc")]
         assert len(arcs) >= 1
 
         arc = arcs[0]
         # Sweep angle should be negative (clockwise)
-        assert arc.sweep_angle < 0
-        assert abs(arc.sweep_angle - (-90.0)) < 0.01
+        assert arc.arc < 0
+        assert abs(arc.arc - (-90.0)) < 0.01
 
     def test_arc_radius_calculation(self, tmp_path):
         """Test that arc radius is correctly calculated from chord and sweep"""
@@ -127,7 +122,7 @@ IDF_FILE 3.0 "Test" "2024-01-01" 1 "Test" "MM"
         parser = IdfParser(str(emn_file))
         idf = parser.parse()
 
-        arcs = [e for e in idf.board_outline.elements if hasattr(e, 'radius')]
+        arcs = [e for e in idf.board_outline.elements if hasattr(e, "radius")]
         if arcs:
             arc = arcs[0]
             # For a 90-degree arc: radius = chord / (2 * sin(45°))
@@ -343,7 +338,7 @@ IDF_FILE 3.0 "Test" "2024-01-01" 1 "Test" "MM"
         # Should have both tuples (points) and Arc objects
         elements = idf.board_outline.elements
         points = [e for e in elements if isinstance(e, tuple)]
-        arcs = [e for e in elements if hasattr(e, 'center')]
+        arcs = [e for e in elements if hasattr(e, "center")]
 
         assert len(points) >= 4  # At least 4 corner points
         assert len(arcs) >= 1  # At least 1 arc
@@ -375,7 +370,7 @@ IDF_FILE 3.0 "Test" "2024-01-01" 1 "Test" "MM"
         assert idf.board_outline.__class__.__name__ == "ArcPolygon"
 
         # Should have 4 arcs (one per corner)
-        arcs = [e for e in idf.board_outline.elements if hasattr(e, 'center')]
+        arcs = [e for e in idf.board_outline.elements if hasattr(e, "center")]
         assert len(arcs) == 4
 
 

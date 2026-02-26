@@ -3,17 +3,11 @@ Pytest unit tests for idf_parser module
 """
 
 import pytest
-import math
+
 from jitx_emn_importer.idf_parser import (
-    IdfParser,
-    IdfFile,
-    IdfHeader,
-    IdfHole,
-    IdfNote,
-    IdfPart,
     IdfException,
-    idf_parser,
     find_refdes,
+    idf_parser,
 )
 
 
@@ -136,7 +130,7 @@ class TestArcHandling:
 
         # Should have mix of points and arcs
         elements = idf.board_outline.elements
-        has_arc = any(hasattr(e, 'center') for e in elements)
+        has_arc = any(hasattr(e, "center") for e in elements)
         has_point = any(isinstance(e, tuple) for e in elements)
 
         assert has_arc, "ArcPolygon should contain at least one Arc"
@@ -173,7 +167,6 @@ class TestBoardCutouts:
         # Check cutout is in expected area (40-60, 20-30)
         elements = cutout.elements
         xs = [e[0] for e in elements]
-        ys = [e[1] for e in elements]
 
         assert 39.0 < min(xs) < 41.0
         assert 59.0 < max(xs) < 61.0
@@ -315,7 +308,7 @@ class TestTabDelimitedInput:
 
     def test_tab_separated_tokens(self, tmp_path):
         """Tabs between fields should be treated as whitespace"""
-        emn_content = ".HEADER\nIDF_FILE\t3.0\t\"Test\"\t\"2024-01-01\"\t1\t\"Board\"\t\"MM\"\n.END_HEADER\n\n.BOARD_OUTLINE\t\"OWNER\"\t1.6\n0\t0\t0\t0\n0\t10\t0\t0\n0\t10\t10\t0\n0\t0\t10\t0\n0\t0\t0\t0\n.END_BOARD_OUTLINE\n"
+        emn_content = '.HEADER\nIDF_FILE\t3.0\t"Test"\t"2024-01-01"\t1\t"Board"\t"MM"\n.END_HEADER\n\n.BOARD_OUTLINE\t"OWNER"\t1.6\n0\t0\t0\t0\n0\t10\t0\t0\n0\t10\t10\t0\n0\t0\t10\t0\n0\t0\t0\t0\n.END_BOARD_OUTLINE\n'
         emn_file = tmp_path / "tabs.emn"
         emn_file.write_text(emn_content)
         idf = idf_parser(str(emn_file))
@@ -324,7 +317,7 @@ class TestTabDelimitedInput:
 
     def test_mixed_tabs_and_spaces(self, tmp_path):
         """Mixed tabs and spaces should both work"""
-        emn_content = ".HEADER\nIDF_FILE 3.0\t\"Test\" \"2024-01-01\"\t1 \"Board\"\t\"MM\"\n.END_HEADER\n\n.BOARD_OUTLINE \"OWNER\" 1.6\n0 0\t0 0\n0 20\t0 0\n0 20\t20 0\n0 0\t20 0\n0 0\t0 0\n.END_BOARD_OUTLINE\n"
+        emn_content = '.HEADER\nIDF_FILE 3.0\t"Test" "2024-01-01"\t1 "Board"\t"MM"\n.END_HEADER\n\n.BOARD_OUTLINE "OWNER" 1.6\n0 0\t0 0\n0 20\t0 0\n0 20\t20 0\n0 0\t20 0\n0 0\t0 0\n.END_BOARD_OUTLINE\n'
         emn_file = tmp_path / "mixed.emn"
         emn_file.write_text(emn_content)
         idf = idf_parser(str(emn_file))
@@ -380,7 +373,7 @@ class TestCircleCenterPreserved:
         idf = idf_parser(str(emn_file))
         circle = idf.board_outline
         assert circle.__class__.__name__ == "Circle"
-        assert hasattr(circle, '_center')
+        assert hasattr(circle, "_center")
         cx, cy = circle._center
         assert abs(cx - 25.0) < 0.01
         assert abs(cy - 25.0) < 0.01

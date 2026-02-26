@@ -7,57 +7,25 @@ Parses mechanical board outline data, cutouts, keepouts, holes, notes, and place
 Port from Stanza idf-parser.stanza to Python for use with JITX Python API.
 """
 
-from dataclasses import dataclass
 import logging
 import math
-from typing import Any
+from dataclasses import dataclass
+
+from jitx.shapes.primitive import Arc, ArcPolygon, Circle, Polygon
 
 logger = logging.getLogger(__name__)
-
-# Try to import JITX Python classes, fall back to mocks if not available
-try:
-    from jitx.shapes.primitive import Circle, Arc, Polygon, ArcPolygon  # type: ignore
-    JITX_AVAILABLE = True
-except ImportError:
-    # Mock geometry classes for when JITX Python is not available
-    JITX_AVAILABLE = False
-
-    class Circle:  # type: ignore
-        def __init__(self, radius: float):
-            self.radius = radius
-        def __repr__(self) -> str:
-            return f"Circle(radius={self.radius})"
-
-    class Arc:  # type: ignore
-        def __init__(self, center: tuple[float, float], radius: float, start_angle: float, sweep_angle: float):
-            self.center = center
-            self.radius = radius
-            self.start_angle = start_angle
-            self.sweep_angle = sweep_angle
-        def __repr__(self) -> str:
-            return f"Arc(center={self.center}, radius={self.radius}, start={self.start_angle}, sweep={self.sweep_angle})"
-
-    class Polygon:  # type: ignore
-        def __init__(self, elements: list[tuple[float, float]]):
-            self.elements = elements
-        def __repr__(self) -> str:
-            return f"Polygon({len(self.elements)} points)"
-
-    class ArcPolygon:  # type: ignore
-        def __init__(self, elements: list[Any]):
-            self.elements = elements
-        def __repr__(self) -> str:
-            return f"ArcPolygon({len(self.elements)} elements)"
 
 
 class IdfException(Exception):
     """Exception for IDF parsing errors"""
+
     pass
 
 
 @dataclass
 class IdfHeader:
     """IDF file header information"""
+
     filetype: str
     idf_version: float
     source_system: str
@@ -70,6 +38,7 @@ class IdfHeader:
 @dataclass
 class IdfOutline:
     """IDF outline (board, panel, keepout, etc.)"""
+
     owner: str
     ident: str  # board/panel/route/place_outline identifier or keepout identifier
     thickness: float  # height field for place outlines, 0.0 for no depth
@@ -81,6 +50,7 @@ class IdfOutline:
 @dataclass
 class IdfHole:
     """IDF drilled hole specification"""
+
     dia: float
     x: float
     y: float
@@ -93,6 +63,7 @@ class IdfHole:
 @dataclass
 class IdfNote:
     """IDF text annotation"""
+
     x: float
     y: float
     height: float
@@ -103,6 +74,7 @@ class IdfNote:
 @dataclass
 class IdfPart:
     """IDF component placement data"""
+
     package: str
     partnumber: str
     refdes: str
@@ -117,6 +89,7 @@ class IdfPart:
 @dataclass
 class IdfPlacement:
     """IDF placement group"""
+
     ident: str
     parts: list[IdfPart]
 
@@ -124,6 +97,7 @@ class IdfPlacement:
 @dataclass
 class IdfFile:
     """Complete parsed IDF file data"""
+
     header: IdfHeader
     board_outline: Polygon | ArcPolygon | Circle
     board_cutouts: tuple[Polygon | ArcPolygon | Circle, ...]
@@ -141,6 +115,7 @@ class IdfFile:
 @dataclass
 class LoopPoint:
     """Internal structure for loop points during parsing"""
+
     id: int
     loop_n: int
     x: float
@@ -150,29 +125,29 @@ class LoopPoint:
 
 class IdfParser:
     """Parser for IDF/EMN format files"""
-    
+
     def __init__(self, filename: str):
         self.filename = filename
         self.ucnv = 1.0  # unit conversion factor
         self.loop_id_seq = 0
-    
+
     def _find_section_end(self, tokens: list[str], match_str: str) -> int:
         """Find the position of the section end marker"""
         try:
             return tokens.index(match_str)
         except ValueError:
             raise IdfException(f"{match_str} not found.")
-    
+
     def _tokenize_line(self, line: str) -> list[str]:
         """Tokenize a line, handling quotes properly"""
         tokens = []
         i = 0
         in_quote = False
         current_token = ""
-        
+
         while i < len(line):
             char = line[i]
-            
+
             if in_quote:
                 if char == '"':
                     tokens.append(current_token)
@@ -183,19 +158,19 @@ class IdfParser:
             else:
                 if char == '"':
                     in_quote = True
-                elif char in (' ', '\t'):
+                elif char in (" ", "\t"):
                     if current_token:
                         tokens.append(current_token)
                         current_token = ""
                 else:
                     current_token += char
             i += 1
-        
+
         if current_token:
             tokens.append(current_token)
-        
+
         return tokens
-    
+
     def _parse_loop_points(self, tokens: list[str]) -> list[LoopPoint]:
         """Parse loop point data from tokens
 
@@ -208,15 +183,15 @@ class IdfParser:
             point = LoopPoint(
                 id=self.loop_id_seq,
                 loop_n=int(tokens[i]),
-                x=float(tokens[i+1]),
-                y=float(tokens[i+2]),
-                angle=float(tokens[i+3])
+                x=float(tokens[i + 1]),
+                y=float(tokens[i + 2]),
+                angle=float(tokens[i + 3]),
             )
             points.append(point)
             self.loop_id_seq += 1
             i += 4
         return points
-    
+
     def _parse_holes(self, tokens: list[str], idf_version: float = 3.0) -> list[IdfHole]:
         """Parse hole data from tokens"""
         holes = []
@@ -226,12 +201,12 @@ class IdfParser:
             while i + 4 < len(tokens):
                 hole = IdfHole(
                     dia=float(tokens[i]) * self.ucnv,
-                    x=float(tokens[i+1]) * self.ucnv,
-                    y=float(tokens[i+2]) * self.ucnv,
-                    plating=tokens[i+3],
-                    assoc=tokens[i+4],
+                    x=float(tokens[i + 1]) * self.ucnv,
+                    y=float(tokens[i + 2]) * self.ucnv,
+                    plating=tokens[i + 3],
+                    assoc=tokens[i + 4],
                     type="",
-                    owner=""
+                    owner="",
                 )
                 holes.append(hole)
                 i += 5
@@ -240,17 +215,17 @@ class IdfParser:
             while i + 6 < len(tokens):
                 hole = IdfHole(
                     dia=float(tokens[i]) * self.ucnv,
-                    x=float(tokens[i+1]) * self.ucnv,
-                    y=float(tokens[i+2]) * self.ucnv,
-                    plating=tokens[i+3],
-                    assoc=tokens[i+4],
-                    type=tokens[i+5],
-                    owner=tokens[i+6]
+                    x=float(tokens[i + 1]) * self.ucnv,
+                    y=float(tokens[i + 2]) * self.ucnv,
+                    plating=tokens[i + 3],
+                    assoc=tokens[i + 4],
+                    type=tokens[i + 5],
+                    owner=tokens[i + 6],
                 )
                 holes.append(hole)
                 i += 7
         return holes
-    
+
     def _parse_notes(self, tokens: list[str]) -> list[IdfNote]:
         """Parse note data from tokens"""
         notes = []
@@ -258,15 +233,15 @@ class IdfParser:
         while i + 4 < len(tokens):
             note = IdfNote(
                 x=float(tokens[i]) * self.ucnv,
-                y=float(tokens[i+1]) * self.ucnv,
-                height=float(tokens[i+2]) * self.ucnv,
-                length=float(tokens[i+3]) * self.ucnv,
-                text=tokens[i+4]
+                y=float(tokens[i + 1]) * self.ucnv,
+                height=float(tokens[i + 2]) * self.ucnv,
+                length=float(tokens[i + 3]) * self.ucnv,
+                text=tokens[i + 4],
             )
             notes.append(note)
             i += 5
         return notes
-    
+
     def _parse_placement(self, tokens: list[str]) -> list[IdfPart]:
         """Parse placement data from tokens"""
         parts = []
@@ -274,20 +249,22 @@ class IdfParser:
         while i + 8 < len(tokens):
             part = IdfPart(
                 package=tokens[i],
-                partnumber=tokens[i+1],
-                refdes=tokens[i+2],
-                x=float(tokens[i+3]) * self.ucnv,
-                y=float(tokens[i+4]) * self.ucnv,
-                offset=float(tokens[i+5]) * self.ucnv,
-                angle=float(tokens[i+6]),
-                side=tokens[i+7],
-                status=tokens[i+8]
+                partnumber=tokens[i + 1],
+                refdes=tokens[i + 2],
+                x=float(tokens[i + 3]) * self.ucnv,
+                y=float(tokens[i + 4]) * self.ucnv,
+                offset=float(tokens[i + 5]) * self.ucnv,
+                angle=float(tokens[i + 6]),
+                side=tokens[i + 7],
+                status=tokens[i + 8],
             )
             parts.append(part)
             i += 9
         return parts
-    
-    def _points_to_geometry(self, loop_points: list[LoopPoint]) -> list[Polygon | ArcPolygon | Circle]:
+
+    def _points_to_geometry(
+        self, loop_points: list[LoopPoint]
+    ) -> list[Polygon | ArcPolygon | Circle]:
         """Convert loop points to JITX geometry objects
 
         Applies unit conversion (self.ucnv) to coordinates during geometry creation.
@@ -325,13 +302,15 @@ class IdfParser:
                 elif abs(point.angle) == 360.0:
                     # Full circle - chord is the diameter
                     new_point = (point.x * self.ucnv, point.y * self.ucnv)
-                    dist = math.sqrt((current_point[0] - new_point[0])**2 +
-                                   (current_point[1] - new_point[1])**2)
+                    dist = math.sqrt(
+                        (current_point[0] - new_point[0]) ** 2
+                        + (current_point[1] - new_point[1]) ** 2
+                    )
                     if dist > 0:
                         cx = (current_point[0] + new_point[0]) / 2.0
                         cy = (current_point[1] + new_point[1]) / 2.0
                         circle = Circle(radius=dist / 2.0)
-                        circle._center = (cx, cy)
+                        circle._center = (cx, cy)  # type: ignore[reportAttributeAccessIssue]
                         geometries.append(circle)
                     current_point = new_point
                     continue  # Don't add to elements, return as separate circle
@@ -343,9 +322,12 @@ class IdfParser:
                     angle = point.angle
 
                     # Calculate arc parameters
-                    dist = math.sqrt((xp - xn)**2 + (yp - yn)**2)
+                    dist = math.sqrt((xp - xn) ** 2 + (yp - yn) ** 2)
                     if dist < 1e-10:  # Points are too close
-                        logger.warning("Arc segment in loop %d has zero or near-zero length, skipping", loop_num)
+                        logger.warning(
+                            "Arc segment in loop %d has zero or near-zero length, skipping",
+                            loop_num,
+                        )
                         continue
 
                     xm = (xp + xn) / 2.0
@@ -357,7 +339,9 @@ class IdfParser:
                     half_sw_ang = math.radians(angle / 2.0)
                     sin_half = math.sin(half_sw_ang)
                     if abs(sin_half) < 1e-10:  # Avoid division by zero
-                        logger.warning("Arc segment in loop %d has invalid angle %s, skipping", loop_num, angle)
+                        logger.warning(
+                            "Arc segment in loop %d has invalid angle %s, skipping", loop_num, angle
+                        )
                         continue
 
                     dist_over_2 = dist / 2.0
@@ -369,7 +353,11 @@ class IdfParser:
                     # Calculate center point
                     radius_sq_minus_d2 = radius**2 - dist_over_2**2
                     if radius_sq_minus_d2 < -1e-6:  # Negative with tolerance
-                        logger.warning("Arc segment in loop %d has invalid geometry (radius too small), skipping", loop_num)
+                        logger.warning(
+                            "Arc segment in loop %d has invalid geometry"
+                            " (radius too small), skipping",
+                            loop_num,
+                        )
                         continue
 
                     dist_m_to_c = math.sqrt(max(0, radius_sq_minus_d2))
@@ -393,7 +381,10 @@ class IdfParser:
                 # Check if loop is already closed
                 if isinstance(elements[-1], tuple):
                     last_pt = elements[-1]
-                    if abs(last_pt[0] - first_point[0]) > 1e-6 or abs(last_pt[1] - first_point[1]) > 1e-6:
+                    if (
+                        abs(last_pt[0] - first_point[0]) > 1e-6
+                        or abs(last_pt[1] - first_point[1]) > 1e-6
+                    ):
                         # Not closed, add first point to close
                         elements.append(first_point)
 
@@ -411,23 +402,23 @@ class IdfParser:
                     geometries.append(Polygon(poly_points))
 
         return geometries
-    
+
     def parse(self) -> IdfFile:
         """Parse the IDF file and return structured data"""
-        with open(self.filename, 'r') as f:
+        with open(self.filename, "r") as f:
             content = f.read()
-        
+
         # Normalize line endings and tokenize
-        lines = content.replace('\r\n', '\n').split('\n')
+        lines = content.replace("\r\n", "\n").split("\n")
         tokens = []
         for line in lines:
             tokens.extend(self._tokenize_line(line.strip()))
-        
+
         # Note: We do NOT filter empty strings here because quoted empty
         # strings ("") are valid tokens in placement records. Blank lines
         # produce no tokens from _tokenize_line, so there are no spurious
         # empty strings to worry about.
-        
+
         # Initialize collections
         headers = []
         board_outlines = []
@@ -440,14 +431,14 @@ class IdfParser:
         holes = []
         notes = []
         placement = []
-        
+
         i = 0
         while i < len(tokens):
             token = tokens[i]
-            
+
             if token == ".HEADER":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_HEADER")
-                header_tokens = tokens[i+1:i+1+end_pos]
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_HEADER")
+                header_tokens = tokens[i + 1 : i + 1 + end_pos]
 
                 header = IdfHeader(
                     filetype=header_tokens[0],
@@ -456,10 +447,10 @@ class IdfParser:
                     date=header_tokens[3],
                     version=int(header_tokens[4]),
                     name=header_tokens[5],
-                    units=header_tokens[6]
+                    units=header_tokens[6],
                 )
                 headers.append(header)
-                
+
                 # Set unit conversion
                 if header.units == "THOU":
                     self.ucnv = 0.0254  # thou to mm
@@ -468,13 +459,15 @@ class IdfParser:
                 else:
                     logger.warning("Unknown units: %s, assuming MM", header.units)
                     self.ucnv = 1.0
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token in [".BOARD_OUTLINE", ".PANEL_OUTLINE"]:
-                end_marker = ".END_PANEL_OUTLINE" if token == ".PANEL_OUTLINE" else ".END_BOARD_OUTLINE"
-                end_pos = self._find_section_end(tokens[i+1:], end_marker)
-                section_tokens = tokens[i+1:i+1+end_pos]
+                end_marker = (
+                    ".END_PANEL_OUTLINE" if token == ".PANEL_OUTLINE" else ".END_BOARD_OUTLINE"
+                )
+                end_pos = self._find_section_end(tokens[i + 1 :], end_marker)
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
 
                 if headers and headers[0].idf_version < 3.0:
                     # IDF 2.0: no owner field, just thickness then loop points
@@ -500,44 +493,44 @@ class IdfParser:
                         thickness=thickness,
                         layers="",
                         outline=outline,
-                        cutouts=cutouts
+                        cutouts=cutouts,
                     )
                     board_outlines.append(board_outline)
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token == ".OTHER_OUTLINE":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_OTHER_OUTLINE")
-                section_tokens = tokens[i+1:i+1+end_pos]
-                
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_OTHER_OUTLINE")
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
+
                 loop_tokens = section_tokens[4:]  # Skip owner, ident, thickness, layers
                 loop_points = self._parse_loop_points(loop_tokens)
                 geometries = self._points_to_geometry(loop_points)
-                
+
                 if geometries:
                     outline = geometries[0]
                     cutouts = geometries[1:] if len(geometries) > 1 else []
-                    
+
                     other_outline = IdfOutline(
                         owner=section_tokens[0],
                         ident=section_tokens[1],
                         thickness=float(section_tokens[2]),
                         layers=section_tokens[3],
                         outline=outline,
-                        cutouts=cutouts
+                        cutouts=cutouts,
                     )
                     other_outlines.append(other_outline)
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token == ".ROUTE_OUTLINE":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_ROUTE_OUTLINE")
-                section_tokens = tokens[i+1:i+1+end_pos]
-                
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_ROUTE_OUTLINE")
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
+
                 loop_tokens = section_tokens[2:]  # Skip owner and layers
                 loop_points = self._parse_loop_points(loop_tokens)
                 geometries = self._points_to_geometry(loop_points)
-                
+
                 if geometries:
                     route_outline = IdfOutline(
                         owner=section_tokens[0],
@@ -545,20 +538,20 @@ class IdfParser:
                         thickness=0.0,
                         layers=section_tokens[1],
                         outline=geometries[0],
-                        cutouts=[]
+                        cutouts=[],
                     )
                     route_outlines.append(route_outline)
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token == ".PLACE_OUTLINE":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_PLACE_OUTLINE")
-                section_tokens = tokens[i+1:i+1+end_pos]
-                
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_PLACE_OUTLINE")
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
+
                 loop_tokens = section_tokens[3:]  # Skip owner, layers, thickness
                 loop_points = self._parse_loop_points(loop_tokens)
                 geometries = self._points_to_geometry(loop_points)
-                
+
                 if geometries:
                     place_outline = IdfOutline(
                         owner=section_tokens[0],
@@ -566,20 +559,20 @@ class IdfParser:
                         thickness=float(section_tokens[2]),
                         layers=section_tokens[1],
                         outline=geometries[0],
-                        cutouts=[]
+                        cutouts=[],
                     )
                     place_outlines.append(place_outline)
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token == ".ROUTE_KEEPOUT":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_ROUTE_KEEPOUT")
-                section_tokens = tokens[i+1:i+1+end_pos]
-                
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_ROUTE_KEEPOUT")
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
+
                 loop_tokens = section_tokens[2:]  # Skip owner and layers
                 loop_points = self._parse_loop_points(loop_tokens)
                 geometries = self._points_to_geometry(loop_points)
-                
+
                 if geometries:
                     route_keepout = IdfOutline(
                         owner=section_tokens[0],
@@ -587,20 +580,20 @@ class IdfParser:
                         thickness=0.0,
                         layers=section_tokens[1],
                         outline=geometries[0],
-                        cutouts=[]
+                        cutouts=[],
                     )
                     route_keepouts.append(route_keepout)
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token == ".VIA_KEEPOUT":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_VIA_KEEPOUT")
-                section_tokens = tokens[i+1:i+1+end_pos]
-                
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_VIA_KEEPOUT")
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
+
                 loop_tokens = section_tokens[1:]  # Skip owner
                 loop_points = self._parse_loop_points(loop_tokens)
                 geometries = self._points_to_geometry(loop_points)
-                
+
                 if geometries:
                     via_keepout = IdfOutline(
                         owner=section_tokens[0],
@@ -608,20 +601,20 @@ class IdfParser:
                         thickness=0.0,
                         layers="",
                         outline=geometries[0],
-                        cutouts=[]
+                        cutouts=[],
                     )
                     via_keepouts.append(via_keepout)
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token == ".PLACE_KEEPOUT":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_PLACE_KEEPOUT")
-                section_tokens = tokens[i+1:i+1+end_pos]
-                
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_PLACE_KEEPOUT")
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
+
                 loop_tokens = section_tokens[3:]  # Skip owner, layers, thickness
                 loop_points = self._parse_loop_points(loop_tokens)
                 geometries = self._points_to_geometry(loop_points)
-                
+
                 if geometries:
                     place_keepout = IdfOutline(
                         owner=section_tokens[0],
@@ -629,41 +622,41 @@ class IdfParser:
                         thickness=float(section_tokens[2]),
                         layers=section_tokens[1],
                         outline=geometries[0],
-                        cutouts=[]
+                        cutouts=[],
                     )
                     place_keepouts.append(place_keepout)
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token == ".DRILLED_HOLES":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_DRILLED_HOLES")
-                section_tokens = tokens[i+1:i+1+end_pos]
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_DRILLED_HOLES")
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
                 version = headers[0].idf_version if headers else 3.0
                 holes.extend(self._parse_holes(section_tokens, idf_version=version))
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token == ".NOTES":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_NOTES")
-                section_tokens = tokens[i+1:i+1+end_pos]
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_NOTES")
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
                 notes.extend(self._parse_notes(section_tokens))
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             elif token == ".PLACEMENT":
-                end_pos = self._find_section_end(tokens[i+1:], ".END_PLACEMENT")
-                section_tokens = tokens[i+1:i+1+end_pos]
+                end_pos = self._find_section_end(tokens[i + 1 :], ".END_PLACEMENT")
+                section_tokens = tokens[i + 1 : i + 1 + end_pos]
                 placement.extend(self._parse_placement(section_tokens))
-                
+
                 i = i + 1 + end_pos + 1
-            
+
             else:
                 # For unknown section markers (starting with "."), try to find
                 # matching .END_* and skip the entire section
                 if token.startswith(".") and not token.startswith(".END_"):
                     end_marker = ".END_" + token[1:]
                     try:
-                        end_pos = self._find_section_end(tokens[i+1:], end_marker)
+                        end_pos = self._find_section_end(tokens[i + 1 :], end_marker)
                         logger.info("Skipping unknown section %s (%d tokens)", token, end_pos)
                         i = i + 1 + end_pos + 1
                     except IdfException:
@@ -672,7 +665,7 @@ class IdfParser:
                         i += 1
                 else:
                     i += 1
-        
+
         # Validate parsed data
         if len(headers) != 1:
             raise IdfException(f"Expected exactly 1 header, found {len(headers)}")
@@ -686,10 +679,12 @@ class IdfParser:
             raise IdfException("Board outline has no geometry")
 
         # Validate polygon has sufficient points
-        if hasattr(outline, 'elements'):
+        if hasattr(outline, "elements"):
             num_elements = len(outline.elements)
             if num_elements < 3:
-                logger.warning("Board outline has only %d elements (expected at least 3)", num_elements)
+                logger.warning(
+                    "Board outline has only %d elements (expected at least 3)", num_elements
+                )
 
         return IdfFile(
             header=headers[0],
@@ -703,7 +698,7 @@ class IdfParser:
             place_keepouts=tuple(place_keepouts),
             holes=tuple(holes),
             notes=tuple(notes),
-            placement=tuple(placement)
+            placement=tuple(placement),
         )
 
 

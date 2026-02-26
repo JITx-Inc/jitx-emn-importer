@@ -12,13 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from jitx_emn_importer.idf_parser import IdfFile, idf_parser
 from jitx_emn_importer.emn_importer import (
     convert_emn_to_jitx_features,
     generate_board_python_code,
     import_emn,
     import_emn_to_design_class,
 )
+from jitx_emn_importer.idf_parser import IdfFile, idf_parser
 
 REAL_EMN_DIR = Path(__file__).parent / "fixtures" / "real_emn"
 
@@ -58,9 +58,7 @@ class TestBoardOutlineValid:
             f"Unexpected outline type: {class_name}"
         )
         if hasattr(outline, "elements"):
-            assert len(outline.elements) >= 3, (
-                f"Outline has only {len(outline.elements)} elements"
-            )
+            assert len(outline.elements) >= 3, f"Outline has only {len(outline.elements)} elements"
         elif hasattr(outline, "radius"):
             assert outline.radius > 0
 
