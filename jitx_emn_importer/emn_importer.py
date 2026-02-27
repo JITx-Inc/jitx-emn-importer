@@ -26,14 +26,41 @@ DEFAULT_PRECISION = 4
 # Module-level precision used by _fmt; set via import_emn(precision=...)
 _precision = DEFAULT_PRECISION
 
+# Angles use fixed high precision to avoid geometric inconsistency
+_ANGLE_PRECISION = 10
+
 
 def _fmt(value: float) -> str:
-    """Format a float for code generation: round and strip trailing zeros."""
+    """Format a length/coordinate for code generation: round to configured precision."""
     rounded = round(value, _precision)
     s = f"{rounded:.{_precision}f}".rstrip("0").rstrip(".")
     if "." not in s:
         s += ".0"
     return s
+
+
+def _fmt_angle(value: float) -> str:
+    """Format an angle (degrees) for code generation.
+
+    Preserves full precision. Does NOT normalize — use _fmt_start_angle
+    or _fmt_sweep_angle for constrained values.
+    """
+    s = f"{value:.{_ANGLE_PRECISION}f}".rstrip("0").rstrip(".")
+    if "." not in s:
+        s += ".0"
+    return s
+
+
+def _fmt_start_angle(value: float) -> str:
+    """Format and normalize a start angle to [0, 360) for JITX Arc."""
+    normalized = value % 360.0
+    return _fmt_angle(normalized)
+
+
+def _fmt_sweep_angle(value: float) -> str:
+    """Format a sweep angle, clamping to (-360, 360) for JITX Arc."""
+    clamped = max(-359.999999, min(359.999999, value))
+    return _fmt_angle(clamped)
 
 
 def _escape_str(text: str) -> str:
@@ -65,10 +92,15 @@ def _point_to_code(p: tuple) -> str:
 
 
 def _arc_to_code(arc: Arc) -> str:
-    """Format an Arc for code generation."""
+    """Format an Arc for code generation.
+
+    Center and radius use coordinate precision.
+    Start angle normalized to [0, 360); sweep clamped to (-360, 360).
+    """
     c = arc.center
     return (
-        f"Arc(({_fmt(c[0])}, {_fmt(c[1])}), {_fmt(arc.radius)}, {_fmt(arc.start)}, {_fmt(arc.arc)})"
+        f"Arc(({_fmt(c[0])}, {_fmt(c[1])}), {_fmt(arc.radius)},"
+        f" {_fmt_start_angle(arc.start)}, {_fmt_sweep_angle(arc.arc)})"
     )
 
 
