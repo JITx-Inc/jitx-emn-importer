@@ -4,7 +4,7 @@ IDF/EMN Parser for JITX Python
 Converts EMN/IDF/BDF format files to JITX-compatible geometry data structures.
 Parses mechanical board outline data, cutouts, keepouts, holes, notes, and placement information.
 
-Port from Stanza idf-parser.stanza to Python for use with JITX Python API.
+For use with JITX Python API.
 """
 
 import logging
@@ -171,6 +171,18 @@ class IdfParser:
 
         return tokens
 
+    @staticmethod
+    def _warn_trailing(section: str, i: int, total: int, record_size: int) -> None:
+        """Warn if there are leftover tokens that don't form a complete record."""
+        remaining = total - i
+        if remaining > 0:
+            logger.warning(
+                "%s has %d trailing token(s) (expected multiple of %d)",
+                section,
+                remaining,
+                record_size,
+            )
+
     def _parse_loop_points(self, tokens: list[str]) -> list[LoopPoint]:
         """Parse loop point data from tokens
 
@@ -190,6 +202,7 @@ class IdfParser:
             points.append(point)
             self.loop_id_seq += 1
             i += 4
+        self._warn_trailing("Loop points", i, len(tokens), 4)
         return points
 
     def _parse_holes(self, tokens: list[str], idf_version: float = 3.0) -> list[IdfHole]:
@@ -210,6 +223,7 @@ class IdfParser:
                 )
                 holes.append(hole)
                 i += 5
+            self._warn_trailing("DRILLED_HOLES (IDF 2.0)", i, len(tokens), 5)
         else:
             # IDF 3.0: 7 fields per hole
             while i + 6 < len(tokens):
@@ -224,6 +238,7 @@ class IdfParser:
                 )
                 holes.append(hole)
                 i += 7
+            self._warn_trailing("DRILLED_HOLES (IDF 3.0)", i, len(tokens), 7)
         return holes
 
     def _parse_notes(self, tokens: list[str]) -> list[IdfNote]:
@@ -240,6 +255,7 @@ class IdfParser:
             )
             notes.append(note)
             i += 5
+        self._warn_trailing("NOTES", i, len(tokens), 5)
         return notes
 
     def _parse_placement(self, tokens: list[str]) -> list[IdfPart]:
@@ -260,6 +276,7 @@ class IdfParser:
             )
             parts.append(part)
             i += 9
+        self._warn_trailing("PLACEMENT", i, len(tokens), 9)
         return parts
 
     def _points_to_geometry(
