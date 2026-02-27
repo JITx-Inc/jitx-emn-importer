@@ -14,12 +14,19 @@ A JITX Python library for importing EMN/IDF/BDF format files and converting them
 ## Installation
 
 ```bash
-# Install from source
+# Install from GitHub
+pip install git+https://github.com/JITx-Inc/jitx-emn-importer.git
+
+# Or clone and install from source
+git clone https://github.com/JITx-Inc/jitx-emn-importer.git
+cd jitx-emn-importer
 pip install -e .
 
-# Or with development dependencies
+# With development dependencies
 pip install -e ".[dev]"
 ```
+
+> **Note:** PyPI publishing (`pip install jitx-emn-importer`) is planned but not yet available.
 
 Requires `jitx>=4.0` (installed automatically as a dependency).
 
