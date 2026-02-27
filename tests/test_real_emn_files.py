@@ -14,9 +14,7 @@ import pytest
 
 from jitx_emn_importer.emn_importer import (
     convert_emn_to_jitx_features,
-    generate_board_python_code,
     import_emn,
-    import_emn_to_design_class,
 )
 from jitx_emn_importer.idf_parser import IdfFile, idf_parser
 
@@ -64,31 +62,20 @@ class TestBoardOutlineValid:
 
 
 class TestGeneratedCodeValidSyntax:
-    """generate_board_python_code() output passes ast.parse()"""
+    """import_emn() output passes ast.parse()"""
 
     @pytest.mark.parametrize("emn_file", ALL_EMN_FILES, ids=emn_id)
-    def test_generated_code_valid_syntax(self, emn_file):
-        idf = idf_parser(str(emn_file))
-        code = generate_board_python_code(idf, emn_file.stem)
-        assert code, "Generated code is empty"
-        ast.parse(code)  # Raises SyntaxError if invalid
-
-
-class TestDesignClassValidSyntax:
-    """import_emn_to_design_class() output passes ast.parse()"""
-
-    @pytest.mark.parametrize("emn_file", ALL_EMN_FILES, ids=emn_id)
-    def test_design_class_valid_syntax(self, emn_file, tmp_path):
+    def test_generated_code_valid_syntax(self, emn_file, tmp_path):
         output = tmp_path / f"{emn_file.stem}_design.py"
-        import_emn_to_design_class(str(emn_file), emn_file.stem, str(output))
+        import_emn(str(emn_file), emn_file.stem, str(output))
         assert output.exists()
         code = output.read_text()
-        assert code, "Generated design class code is empty"
+        assert code, "Generated code is empty"
         ast.parse(code)
 
 
 class TestImportRoundtrip:
-    """import_emn() creates a non-empty, valid Python file"""
+    """import_emn() creates a non-empty, valid Python file with proper structure"""
 
     @pytest.mark.parametrize("emn_file", ALL_EMN_FILES, ids=emn_id)
     def test_import_roundtrip(self, emn_file, tmp_path):
@@ -98,6 +85,11 @@ class TestImportRoundtrip:
         code = output.read_text()
         assert len(code) > 0
         ast.parse(code)
+        # Generated code should have proper JITX classes, not layer() calls
+        assert "Board" in code
+        assert "Circuit" in code
+        assert "Design" in code
+        assert "layer(" not in code
 
 
 class TestFeatureConversion:

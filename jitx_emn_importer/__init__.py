@@ -7,17 +7,14 @@ keepouts, holes, notes, and placement information from CAD exports into JITX
 Python geometry and layer specifications.
 
 Main functions:
-- import_emn: Import EMN file and generate Python helper functions
-- import_emn_to_design_class: Import EMN file and generate complete Design class
+- import_emn: Import EMN file and generate Board + Circuit + Design classes
 - idf_parser: Parse EMN/IDF file to structured data
 - convert_emn_to_jitx_features: Convert parsed data to JITX feature objects
 """
 
 from .emn_importer import (
     convert_emn_to_jitx_features,
-    generate_board_python_code,
     import_emn,
-    import_emn_to_design_class,
 )
 from .idf_parser import (
     IdfException,
@@ -48,7 +45,5 @@ __all__ = [
     "find_refdes",
     # Importer functions
     "import_emn",
-    "import_emn_to_design_class",
     "convert_emn_to_jitx_features",
-    "generate_board_python_code",
 ]
