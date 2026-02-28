@@ -20,19 +20,52 @@ from .idf_parser import IdfFile, idf_parser
 
 logger = logging.getLogger(__name__)
 
-# Coordinate precision for generated code (decimal places)
-_PRECISION = 4
+# Default coordinate precision for generated code (decimal places)
+DEFAULT_PRECISION = 4
+
+# Module-level precision used by _fmt; set via import_emn(precision=...)
+_precision = DEFAULT_PRECISION
+
+# Angles use fixed high precision to avoid geometric inconsistency
+_ANGLE_PRECISION = 10
 
 
 def _fmt(value: float) -> str:
-    """Format a float for code generation: round and strip trailing zeros."""
-    rounded = round(value, _PRECISION)
-    # Use 'g' format to strip trailing zeros, but ensure at least one decimal
-    s = f"{rounded:.{_PRECISION}f}".rstrip("0").rstrip(".")
-    # Ensure there's always a decimal point for float literals
+    """Format a length/coordinate for code generation: round to configured precision."""
+    rounded = round(value, _precision)
+    s = f"{rounded:.{_precision}f}".rstrip("0").rstrip(".")
     if "." not in s:
         s += ".0"
     return s
+
+
+def _fmt_angle(value: float) -> str:
+    """Format an angle (degrees) for code generation.
+
+    Preserves full precision. Does NOT normalize — use _fmt_start_angle
+    or _fmt_sweep_angle for constrained values.
+    """
+    s = f"{value:.{_ANGLE_PRECISION}f}".rstrip("0").rstrip(".")
+    if "." not in s:
+        s += ".0"
+    return s
+
+
+def _fmt_start_angle(value: float) -> str:
+    """Format and normalize a start angle to [0, 360) for JITX Arc."""
+    normalized = value % 360.0
+    return _fmt_angle(normalized)
+
+
+def _fmt_sweep_angle(value: float) -> str:
+    """Format a sweep angle, clamping to (-360, 360) for JITX Arc."""
+    clamped = max(-359.999999, min(359.999999, value))
+    return _fmt_angle(clamped)
+
+
+def _escape_str(text: str) -> str:
+    """Escape a string for embedding in generated Python code as a double-quoted literal."""
+    return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
 
 
 def sanitize_identifier(name: str) -> str:
@@ -59,10 +92,15 @@ def _point_to_code(p: tuple) -> str:
 
 
 def _arc_to_code(arc: Arc) -> str:
-    """Format an Arc for code generation."""
+    """Format an Arc for code generation.
+
+    Center and radius use coordinate precision.
+    Start angle normalized to [0, 360); sweep clamped to (-360, 360).
+    """
     c = arc.center
     return (
-        f"Arc(({_fmt(c[0])}, {_fmt(c[1])}), {_fmt(arc.radius)}, {_fmt(arc.start)}, {_fmt(arc.arc)})"
+        f"Arc(({_fmt(c[0])}, {_fmt(c[1])}), {_fmt(arc.radius)},"
+        f" {_fmt_start_angle(arc.start)}, {_fmt_sweep_angle(arc.arc)})"
     )
 
 
@@ -183,7 +221,7 @@ def _generate_feature_code(idf: IdfFile) -> dict[str, list[str]]:
     # Notes
     for note in idf.notes:
         text = note.text.replace(chr(1), "").replace(chr(2), "")
-        text_escaped = text.replace('"', '\\"')
+        text_escaped = _escape_str(text)
         h = _fmt(note.height)
         x = _fmt(note.x)
         y = _fmt(note.y)
@@ -194,7 +232,7 @@ def _generate_feature_code(idf: IdfFile) -> dict[str, list[str]]:
 
     # Placement markers
     for part in idf.placement:
-        ref_escaped = part.refdes.replace('"', '\\"')
+        ref_escaped = _escape_str(part.refdes)
         x = _fmt(part.x)
         y = _fmt(part.y)
         result["placement"].append(
@@ -218,7 +256,12 @@ def _write_feature_list(output: StringIO, items: list[str], attr_name: str, inde
         output.write(f"{indent}]\n")
 
 
-def import_emn(emn_filename: str, class_name: str, output_filename: str) -> None:
+def import_emn(
+    emn_filename: str,
+    class_name: str,
+    output_filename: str,
+    precision: int = DEFAULT_PRECISION,
+) -> None:
     """
     Import EMN/IDF file and generate a complete JITX Design (Board + Circuit + Design).
 
@@ -226,7 +269,10 @@ def import_emn(emn_filename: str, class_name: str, output_filename: str) -> None
         emn_filename: Path to the EMN/IDF file to import
         class_name: Name prefix for the generated classes
         output_filename: Output Python file path
+        precision: Decimal places for coordinate rounding (default 4)
     """
+    global _precision
+    _precision = precision
     idf = idf_parser(emn_filename)
     clean_class = sanitize_identifier(class_name)
     features = _generate_feature_code(idf)
@@ -326,12 +372,9 @@ def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
 
     # Holes
     for hole in idf_file.holes:
-        hole_circle = Circle(radius=hole.dia * 0.5)
-        if hasattr(hole_circle, "at"):
-            hole_circle = hole_circle.at(hole.x, hole.y)
-        features.append(Cutout(hole_circle))
+        features.append(Cutout(Circle(radius=hole.dia * 0.5).at(hole.x, hole.y)))
 
-    # Route keepouts (copper keepouts)
+    # Route keepouts
     for route_keepout in idf_file.route_keepouts:
         if route_keepout.layers.upper() in ("TOP", "COMPONENT"):
             layer_set = LayerSet(0)
@@ -339,19 +382,11 @@ def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
             layer_set = LayerSet(-1)
         else:
             layer_set = LayerSet.all()
-
         features.append(KeepOut(route_keepout.outline, layers=layer_set, pour=True, via=False))
 
     # Via keepouts
     for via_keepout in idf_file.via_keepouts:
-        features.append(
-            KeepOut(
-                via_keepout.outline,
-                layers=LayerSet.all(),
-                pour=False,
-                via=True,
-            )
-        )
+        features.append(KeepOut(via_keepout.outline, layers=LayerSet.all(), pour=False, via=True))
 
     # Place keepouts
     for place_keepout in idf_file.place_keepouts:
@@ -360,16 +395,12 @@ def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
     # Notes
     for note in idf_file.notes:
         text = note.text.replace(chr(1), "").replace(chr(2), "")
-        text_shape = Text(text, size=note.height, anchor=Anchor.SW)
-        if hasattr(text_shape, "at"):
-            text_shape = text_shape.at(note.x, note.y)
+        text_shape = Text(text, size=note.height, anchor=Anchor.SW).at(note.x, note.y)
         features.append(Custom(text_shape, name="Assembly Notes"))
 
     # Placement markers
     for part in idf_file.placement:
-        marker_text = Text(part.refdes, size=1.0, anchor=Anchor.C)
-        if hasattr(marker_text, "at"):
-            marker_text = marker_text.at(part.x, part.y)
+        marker_text = Text(part.refdes, size=1.0, anchor=Anchor.C).at(part.x, part.y)
         features.append(Custom(marker_text, name="Component Placement"))
 
     return features
@@ -386,9 +417,15 @@ def main():
     parser.add_argument("emn_file", help="Path to the EMN/IDF/BDF file to import")
     parser.add_argument("class_name", help="Name prefix for the generated classes")
     parser.add_argument("output_file", help="Output Python file path")
+    parser.add_argument(
+        "--precision",
+        type=int,
+        default=DEFAULT_PRECISION,
+        help=f"Decimal places for coordinate rounding (default {DEFAULT_PRECISION})",
+    )
 
     args = parser.parse_args()
-    import_emn(args.emn_file, args.class_name, args.output_file)
+    import_emn(args.emn_file, args.class_name, args.output_file, precision=args.precision)
 
 
 if __name__ == "__main__":
