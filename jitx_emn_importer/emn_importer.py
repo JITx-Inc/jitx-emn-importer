@@ -23,17 +23,14 @@ logger = logging.getLogger(__name__)
 # Default coordinate precision for generated code (decimal places)
 DEFAULT_PRECISION = 4
 
-# Module-level precision used by _fmt; set via import_emn(precision=...)
-_precision = DEFAULT_PRECISION
-
 # Angles use fixed high precision to avoid geometric inconsistency
 _ANGLE_PRECISION = 10
 
 
-def _fmt(value: float) -> str:
-    """Format a length/coordinate for code generation: round to configured precision."""
-    rounded = round(value, _precision)
-    s = f"{rounded:.{_precision}f}".rstrip("0").rstrip(".")
+def _fmt(value: float, *, precision: int = DEFAULT_PRECISION) -> str:
+    """Format a length/coordinate for code generation: round to given precision."""
+    rounded = round(value, precision)
+    s = f"{rounded:.{precision}f}".rstrip("0").rstrip(".")
     if "." not in s:
         s += ".0"
     return s
@@ -53,14 +50,19 @@ def _fmt_angle(value: float) -> str:
 
 def _fmt_start_angle(value: float) -> str:
     """Format and normalize a start angle to [0, 360) for JITX Arc."""
-    normalized = value % 360.0
-    return _fmt_angle(normalized)
+    return _fmt_angle(value % 360.0)
 
 
 def _fmt_sweep_angle(value: float) -> str:
-    """Format a sweep angle, clamping to (-360, 360) for JITX Arc."""
-    clamped = max(-359.999999, min(359.999999, value))
-    return _fmt_angle(clamped)
+    """Format a sweep angle for JITX Arc.
+
+    Values of exactly +/-360 should not occur (the parser converts those
+    to Circle objects), but if they slip through we warn and leave them
+    as-is rather than silently altering the geometry.
+    """
+    if abs(abs(value) - 360.0) < 1e-10:
+        logger.warning("Arc sweep of %.1f degrees should be a Circle, not an Arc", value)
+    return _fmt_angle(value)
 
 
 def _escape_str(text: str) -> str:
@@ -86,43 +88,45 @@ def indent_text(text: str, levels: int = 1) -> str:
     return "\n".join(indented_lines)
 
 
-def _point_to_code(p: tuple) -> str:
+def _point_to_code(p: tuple, *, precision: int = DEFAULT_PRECISION) -> str:
     """Format a point tuple for code generation."""
-    return f"({_fmt(p[0])}, {_fmt(p[1])})"
+    return f"({_fmt(p[0], precision=precision)}, {_fmt(p[1], precision=precision)})"
 
 
-def _arc_to_code(arc: Arc) -> str:
+def _arc_to_code(arc: Arc, *, precision: int = DEFAULT_PRECISION) -> str:
     """Format an Arc for code generation.
 
     Center and radius use coordinate precision.
-    Start angle normalized to [0, 360); sweep clamped to (-360, 360).
+    Start angle normalized to [0, 360); sweep passed through as-is.
     """
     c = arc.center
     return (
-        f"Arc(({_fmt(c[0])}, {_fmt(c[1])}), {_fmt(arc.radius)},"
+        f"Arc(({_fmt(c[0], precision=precision)}, {_fmt(c[1], precision=precision)}),"
+        f" {_fmt(arc.radius, precision=precision)},"
         f" {_fmt_start_angle(arc.start)}, {_fmt_sweep_angle(arc.arc)})"
     )
 
 
-def shape_to_python_code(shape: Any) -> str:
+def shape_to_python_code(shape: Any, *, precision: int = DEFAULT_PRECISION) -> str:
     """Convert a JITX shape to a single-line Python code string."""
+    f = lambda v: _fmt(v, precision=precision)  # noqa: E731
     if isinstance(shape, Circle):
         center = getattr(shape, "_center", None)
         if center and (abs(center[0]) > 1e-10 or abs(center[1]) > 1e-10):
-            return f"Circle(radius={_fmt(shape.radius)}).at({_fmt(center[0])}, {_fmt(center[1])})"
-        return f"Circle(radius={_fmt(shape.radius)})"
+            return f"Circle(radius={f(shape.radius)}).at({f(center[0])}, {f(center[1])})"
+        return f"Circle(radius={f(shape.radius)})"
     elif isinstance(shape, ArcPolygon):
         parts = []
         for elem in shape.elements:
             if isinstance(elem, tuple):
-                parts.append(_point_to_code(elem))
+                parts.append(_point_to_code(elem, precision=precision))
             elif isinstance(elem, Arc):
-                parts.append(_arc_to_code(elem))
+                parts.append(_arc_to_code(elem, precision=precision))
             else:
                 parts.append(f"# Unknown: {type(elem).__name__}")
         return f"ArcPolygon([{', '.join(parts)}])"
     elif isinstance(shape, Polygon):
-        elements_str = ", ".join(_point_to_code(p) for p in shape.elements)
+        elements_str = ", ".join(_point_to_code(p, precision=precision) for p in shape.elements)
         return f"Polygon([{elements_str}])"
     elif hasattr(shape, "__class__"):
         return f"{shape.__class__.__name__}()"
@@ -130,22 +134,25 @@ def shape_to_python_code(shape: Any) -> str:
         return str(shape)
 
 
-def shape_to_multiline_code(shape: Any, indent: int = 0) -> str:
+def shape_to_multiline_code(
+    shape: Any, indent: int = 0, *, precision: int = DEFAULT_PRECISION
+) -> str:
     """Convert a JITX shape to multi-line Python code, one element per line."""
     prefix = "    " * indent
+    f = lambda v: _fmt(v, precision=precision)  # noqa: E731
 
     if isinstance(shape, Circle):
         center = getattr(shape, "_center", None)
         if center and (abs(center[0]) > 1e-10 or abs(center[1]) > 1e-10):
-            return f"Circle(radius={_fmt(shape.radius)}).at({_fmt(center[0])}, {_fmt(center[1])})"
-        return f"Circle(radius={_fmt(shape.radius)})"
+            return f"Circle(radius={f(shape.radius)}).at({f(center[0])}, {f(center[1])})"
+        return f"Circle(radius={f(shape.radius)})"
     elif isinstance(shape, ArcPolygon):
         lines = ["ArcPolygon(["]
         for elem in shape.elements:
             if isinstance(elem, tuple):
-                lines.append(f"{prefix}    {_point_to_code(elem)},")
+                lines.append(f"{prefix}    {_point_to_code(elem, precision=precision)},")
             elif isinstance(elem, Arc):
-                lines.append(f"{prefix}    {_arc_to_code(elem)},")
+                lines.append(f"{prefix}    {_arc_to_code(elem, precision=precision)},")
             else:
                 lines.append(f"{prefix}    # Unknown: {type(elem).__name__}")
         lines.append(f"{prefix}])")
@@ -153,11 +160,11 @@ def shape_to_multiline_code(shape: Any, indent: int = 0) -> str:
     elif isinstance(shape, Polygon):
         lines = ["Polygon(["]
         for p in shape.elements:
-            lines.append(f"{prefix}    {_point_to_code(p)},")
+            lines.append(f"{prefix}    {_point_to_code(p, precision=precision)},")
         lines.append(f"{prefix}])")
         return "\n".join(lines)
     else:
-        return shape_to_python_code(shape)
+        return shape_to_python_code(shape, precision=precision)
 
 
 def determine_layer_set(layers_str: str) -> str:
@@ -172,13 +179,16 @@ def determine_layer_set(layers_str: str) -> str:
         return "LayerSet.all()"
 
 
-def _generate_feature_code(idf: IdfFile) -> dict[str, list[str]]:
+def _generate_feature_code(
+    idf: IdfFile, *, precision: int = DEFAULT_PRECISION
+) -> dict[str, list[str]]:
     """Generate categorized feature code strings from IDF data.
 
     Returns a dict with keys: cutouts, route_keepouts, via_keepouts,
     place_keepouts, notes, placement. Each value is a list of Python
     code strings (one per feature, no leading indent).
     """
+    f = lambda v: _fmt(v, precision=precision)  # noqa: E731
     result: dict[str, list[str]] = {
         "cutouts": [],
         "route_keepouts": [],
@@ -190,54 +200,49 @@ def _generate_feature_code(idf: IdfFile) -> dict[str, list[str]]:
 
     # Board cutouts
     for cutout in idf.board_cutouts:
-        shape_code = shape_to_python_code(cutout)
+        shape_code = shape_to_python_code(cutout, precision=precision)
         result["cutouts"].append(f"Cutout({shape_code})")
 
     # Holes as cutouts
     for hole in idf.holes:
-        r = _fmt(hole.dia * 0.5)
-        result["cutouts"].append(f"Cutout(Circle(radius={r}).at({_fmt(hole.x)}, {_fmt(hole.y)}))")
+        r = f(hole.dia * 0.5)
+        result["cutouts"].append(f"Cutout(Circle(radius={r}).at({f(hole.x)}, {f(hole.y)}))")
 
     # Route keepouts
     for keepout in idf.route_keepouts:
         layer_set = determine_layer_set(keepout.layers)
-        shape_code = shape_to_python_code(keepout.outline)
+        shape_code = shape_to_python_code(keepout.outline, precision=precision)
         result["route_keepouts"].append(
             f"KeepOut({shape_code}, layers={layer_set}, pour=True, via=False)"
         )
 
     # Via keepouts
     for keepout in idf.via_keepouts:
-        shape_code = shape_to_python_code(keepout.outline)
+        shape_code = shape_to_python_code(keepout.outline, precision=precision)
         result["via_keepouts"].append(
             f"KeepOut({shape_code}, layers=LayerSet.all(), pour=False, via=True)"
         )
 
     # Place keepouts
     for keepout in idf.place_keepouts:
-        shape_code = shape_to_python_code(keepout.outline)
+        shape_code = shape_to_python_code(keepout.outline, precision=precision)
         result["place_keepouts"].append(f'Custom({shape_code}, name="Placement Keepout")')
 
     # Notes
     for note in idf.notes:
         text = note.text.replace(chr(1), "").replace(chr(2), "")
         text_escaped = _escape_str(text)
-        h = _fmt(note.height)
-        x = _fmt(note.x)
-        y = _fmt(note.y)
         result["notes"].append(
-            f'Custom(Text("{text_escaped}", size={h}, anchor=Anchor.SW).at({x}, {y}),'
-            f' name="Assembly Notes")'
+            f'Custom(Text("{text_escaped}", size={f(note.height)}, anchor=Anchor.SW)'
+            f'.at({f(note.x)}, {f(note.y)}), name="Assembly Notes")'
         )
 
     # Placement markers
     for part in idf.placement:
         ref_escaped = _escape_str(part.refdes)
-        x = _fmt(part.x)
-        y = _fmt(part.y)
         result["placement"].append(
-            f'Custom(Text("{ref_escaped}", size=1.0, anchor=Anchor.C).at({x}, {y}),'
-            f' name="Component Placement")'
+            f'Custom(Text("{ref_escaped}", size=1.0, anchor=Anchor.C)'
+            f'.at({f(part.x)}, {f(part.y)}), name="Component Placement")'
         )
 
     return result
@@ -271,11 +276,9 @@ def import_emn(
         output_filename: Output Python file path
         precision: Decimal places for coordinate rounding (default 4)
     """
-    global _precision
-    _precision = precision
     idf = idf_parser(emn_filename)
     clean_class = sanitize_identifier(class_name)
-    features = _generate_feature_code(idf)
+    features = _generate_feature_code(idf, precision=precision)
 
     output = StringIO()
 
@@ -292,7 +295,7 @@ def import_emn(
 
     # Board class with multi-line shape
     output.write(f"class {clean_class}Board(Board):\n")
-    shape_code = shape_to_multiline_code(idf.board_outline, indent=1)
+    shape_code = shape_to_multiline_code(idf.board_outline, indent=1, precision=precision)
     output.write(f"    shape = {shape_code}\n")
     output.write("\n\n")
 
