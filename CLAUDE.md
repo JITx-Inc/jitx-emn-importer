@@ -4,97 +4,109 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-The `jitx-emn-importer` is a JITX library for importing EMN/IDF/BDF format files and converting them to JITX PCB design data. It parses mechanical board outline data, cutouts, keepouts, holes, notes, and placement information from CAD exports into JITX-compatible geometry.
+The `jitx-emn-importer` is a JITX Python library for importing EMN/IDF/BDF format files and converting them to JITX PCB design data. It parses mechanical board outline data, cutouts, keepouts, holes, notes, and placement information from CAD exports and generates complete JITX Python Board + Circuit + Design classes.
 
 ## Installation and Usage
 
-This is a JITX package managed by SLM (JITX package manager). Users install it via:
-```
-$SLM add -git JITx-Inc/jitx-emn-importer
+```bash
+pip install -e .          # Install package (requires jitx>=4.0)
+pip install -e ".[dev]"   # With dev dependencies (pytest, ruff, pyright)
 ```
 
-The main entry point is the `import-emn` function which generates a `board.stanza` file containing:
-- `emn-board-outline`: Board boundary geometry for use in `pcb-board` definitions
-- `emn-module()`: Function containing mechanical data (cutouts, text, etc.) for instantiation in PCB modules
+The main entry point is `import_emn()` which generates a Python file containing:
+- A `Board` subclass with the board outline shape
+- A `Circuit` subclass with categorized mechanical features (cutouts, keepouts, notes, placement)
+- A `Design` subclass wiring them together
+
+```bash
+emn-import board.emn MyBoard board_design.py
+```
 
 ## Architecture
 
+### File Structure
+```
+jitx_emn_importer/
+├── __init__.py         # Package exports
+├── idf_parser.py       # Core EMN/IDF parsing engine
+└── emn_importer.py     # Code generation and JITX feature conversion
+tests/
+├── conftest.py         # Shared fixtures (inline EMN data)
+├── test_idf_parser.py  # Parser unit tests
+├── test_geometry.py    # Arc/polygon geometry tests
+├── test_emn_importer.py # Code generation tests
+└── test_real_emn_files.py # Integration tests against real EMN files
+    fixtures/real_emn/  # Real EMN files (unzip testEMNs.zip)
+```
+
 ### Core Components
 
-1. **idf-parser.stanza** (`src/idf-parser.stanza:1-417`): 
-   - Low-level EMN/IDF file parsing engine
-   - Defines data structures for IDF format elements (headers, outlines, holes, notes, placement)
-   - Contains geometry conversion logic for arcs, circles, and polygons
-   - Handles unit conversion (THOU to mm, MM units)
-   - Main parsing function: `IdfParser(filename:String) -> IdfFile`
+1. **idf_parser.py**: Low-level EMN/IDF file parsing
+   - `IdfParser` class: Tokenizer, section parser, geometry converter
+   - `idf_parser(filename)` → `IdfFile`: Main entry point
+   - Supports IDF 2.0 and 3.0 formats with automatic detection
+   - Handles arcs, circles, polygons, unit conversion (THOU→MM)
+   - Key data structures: `IdfFile`, `IdfOutline`, `IdfHole`, `IdfNote`, `IdfPart`
 
-2. **emn-importer.stanza** (`src/emn-importer.stanza:1-74`):
-   - High-level import interface 
-   - Converts parsed IDF data to JITX layer specifications
-   - Generates Stanza code output for board definitions
-   - Main function: `import-emn(emn-filename, package-name, output-stanza-filename)`
+2. **emn_importer.py**: High-level import and code generation
+   - `import_emn(emn_file, class_name, output_file)`: Generates Board + Circuit + Design classes
+   - `convert_emn_to_jitx_features(idf_file)` → `list[Feature]`: Returns actual JITX objects
+   - `shape_to_python_code(shape)`: Single-line shape serialization
+   - `shape_to_multiline_code(shape, indent)`: Multi-line formatted output
+   - `_fmt(value)`: Rounds coordinates to 4 decimal places
+   - `_generate_feature_code(idf)`: Returns features categorized by type
 
 ### Data Flow
 
 ```
-EMN/IDF File → IdfParser → IdfFile struct → Layer conversions → Generated Stanza code
+EMN/IDF File → IdfParser → IdfFile → import_emn() → Board/Circuit/Design Python file
+                                    → convert_emn_to_jitx_features() → JITX Feature objects
 ```
 
-### Key Data Structures
+### Generated Code Structure
 
-- `IdfFile`: Complete parsed IDF data including board outlines, cutouts, holes, notes, placement
-- `IdfOutline`: Board/panel outlines and keepout regions with geometry and layer info  
-- `IdfHole`: Drilled hole specifications with position and plating info
-- `IdfNote`: Text annotations with position and formatting
-- `IdfPart`: Component placement data with position, rotation, and side
-- `Layer`: JITX layer specification pairing LayerIndex/LayerSpecifier with Shape geometry
-
-### Geometry Handling
-
-The parser handles complex EMN geometry including:
-- Polygons with arc segments (`PolygonWithArcs`)
-- Full circles (360-degree arcs)
-- Arc calculations with center point derivation from chord and sweep angle
-- Unit conversion between THOU and MM coordinate systems
-
-## Development
-
-### File Structure
-```
-src/
-├── idf-parser.stanza    # Core EMN/IDF parsing logic
-└── emn-importer.stanza  # High-level import interface
-```
-
-### Key Functions
-
-**Parser Functions (`idf-parser.stanza`)**:
-- `IdfParser(filename:String)`: Main parser entry point
-- `loopt_PolygonWithArcs()`: Converts EMN loop data to JITX geometry
-- `findarefdes()`: Finds component by reference designator
-
-**Import Functions (`emn-importer.stanza`)**:
-- `import-emn()`: Main import interface, generates output Stanza file
-- Layer conversion functions for different EMN data types
+Features are grouped by type in the Circuit class:
+- `self.cutouts` — board cutouts + drilled holes
+- `self.route_keepouts` — copper pour restrictions
+- `self.via_keepouts` — via placement restrictions
+- `self.place_keepouts` — component placement guides
+- `self.notes` — assembly text annotations
+- `self.placement_markers` — component position markers
 
 ### Dependencies
 
-The project uses JITX standard libraries:
-- `jitx`: Core JITX functionality
-- `jitx/layer-specs`: Layer specification types
-- `jitx/geometry/*`: Geometry utilities for arcs and measurements
+- `jitx>=4.0` — Required. Provides shape primitives (Arc, Circle, Polygon, ArcPolygon), feature classes (Cutout, KeepOut, Custom), and design classes (Board, Circuit, Design).
+- No mock/fallback classes — the package requires a working JITX installation.
 
-### References
+### JITX API Reference
 
-- **python-refs/**: Directory containing important Python syntax references for JITX development
-- **JITX API Documentation**: https://docs-dev.jitx.com/en/0.1.3.dev421+g92ed63806/api/modules.html
+- **Shapes**: `jitx.shapes.primitive` — Arc, ArcPolygon, Circle, Polygon, Text
+- **Features**: `jitx.feature` — Cutout, KeepOut, Custom
+- **Layers**: `jitx.layerindex` — LayerSet, Side
+- **Arc attributes**: `arc.center`, `arc.radius`, `arc.start`, `arc.arc` (NOT `start_angle`/`sweep_angle`)
+- **Circle constructor**: `Circle(radius=...)` (keyword-only)
+- **JITX API Docs**: https://docs.jitx.com/
 
-### Testing
+## Development
 
-No automated test framework is present. Testing is done via the JITX REPL:
+### Running Checks
+
+```bash
+pytest tests/ -v                        # Run tests
+ruff format jitx_emn_importer/ tests/   # Format
+ruff check jitx_emn_importer/ tests/    # Lint
+pyright jitx_emn_importer/              # Type check
 ```
-stanza> import emn-importer  
-stanza> import-emn("test.emn", "test-package", "board.stanza")
-```
 
-Generated files can be validated by importing them into JITX projects and checking geometry rendering.
+### Integration Tests
+
+Real EMN file tests require fixture files:
+1. Unzip `testEMNs.zip` into `tests/fixtures/real_emn/`
+2. Tests in `test_real_emn_files.py` will automatically discover and run against all `.emn` files
+
+### Tool Configuration
+
+Configured in `pyproject.toml`:
+- **ruff**: line-length 100, py312 target, E/F/I/W rules, E501 ignored in tests
+- **pyright**: py312
+- **pytest**: verbose, short tracebacks

@@ -5,6 +5,7 @@ Pytest unit tests for emn_importer module
 import ast
 
 from jitx_emn_importer.emn_importer import (
+    _escape_str,
     _fmt,
     _generate_feature_code,
     convert_emn_to_jitx_features,
@@ -344,3 +345,103 @@ class TestLayerAliases:
         assert len(features) == 1
         keepout = features[0]
         assert list(keepout.layers.ranges) == [(-1, -1)]
+
+
+class TestEscapeStr:
+    """Test string escaping for generated Python code"""
+
+    def test_plain_text(self):
+        assert _escape_str("hello") == "hello"
+
+    def test_double_quotes(self):
+        assert _escape_str('say "hi"') == 'say \\"hi\\"'
+
+    def test_backslashes(self):
+        assert _escape_str("C:\\Users\\path") == "C:\\\\Users\\\\path"
+
+    def test_newlines(self):
+        assert _escape_str("line1\nline2") == "line1\\nline2"
+
+    def test_carriage_returns(self):
+        assert _escape_str("line1\r\nline2") == "line1\\r\\nline2"
+
+    def test_combined(self):
+        assert _escape_str('a "b"\nc\\d') == 'a \\"b\\"\\nc\\\\d'
+
+
+class TestSpecialCharactersInCodeGen:
+    """Test that special characters in notes/refdes produce valid generated Python"""
+
+    def _make_idf_with_note(self, note_text):
+        from jitx_emn_importer.idf_parser import IdfHeader, IdfNote
+
+        header = IdfHeader("IDF_FILE", 3.0, "test", "2024", 1, "test", "MM")
+        note = IdfNote(x=10.0, y=20.0, height=1.5, length=10.0, text=note_text)
+        return IdfFile(
+            header=header,
+            board_outline=Polygon([(0, 0), (100, 0), (100, 50), (0, 50), (0, 0)]),
+            board_cutouts=(),
+            other_outlines=(),
+            route_outlines=(),
+            place_outlines=(),
+            route_keepouts=(),
+            via_keepouts=(),
+            place_keepouts=(),
+            holes=(),
+            notes=(note,),
+            placement=(),
+        )
+
+    def test_note_with_newline(self):
+        idf = self._make_idf_with_note("LINE1\nLINE2")
+        features = _generate_feature_code(idf)
+        code = features["notes"][0]
+        # No raw newlines in the generated code string
+        assert "\n" not in code
+        # Should be parseable as a Python expression
+        ast.parse(f"x = [{code}]")
+
+    def test_note_with_backslash(self):
+        idf = self._make_idf_with_note("C:\\TEMP\\FILE")
+        features = _generate_feature_code(idf)
+        code = features["notes"][0]
+        ast.parse(f"x = [{code}]")
+
+    def test_note_with_quotes(self):
+        idf = self._make_idf_with_note('say "hello"')
+        features = _generate_feature_code(idf)
+        code = features["notes"][0]
+        ast.parse(f"x = [{code}]")
+
+    def test_refdes_with_special_chars(self):
+        from jitx_emn_importer.idf_parser import IdfHeader, IdfPart
+
+        header = IdfHeader("IDF_FILE", 3.0, "test", "2024", 1, "test", "MM")
+        part = IdfPart(
+            package="PKG",
+            partnumber="PN",
+            refdes='R1"special',
+            x=5.0,
+            y=5.0,
+            offset=0.0,
+            angle=0.0,
+            side="TOP",
+            status="PLACED",
+        )
+        idf = IdfFile(
+            header=header,
+            board_outline=Polygon([(0, 0), (100, 0), (100, 50), (0, 50), (0, 0)]),
+            board_cutouts=(),
+            other_outlines=(),
+            route_outlines=(),
+            place_outlines=(),
+            route_keepouts=(),
+            via_keepouts=(),
+            place_keepouts=(),
+            holes=(),
+            notes=(),
+            placement=(part,),
+        )
+        features = _generate_feature_code(idf)
+        code = features["placement"][0]
+        ast.parse(f"x = [{code}]")
