@@ -413,10 +413,13 @@ def main():
     """Command-line interface for EMN/IDF importer"""
     import argparse
 
+    from . import __version__
+
     parser = argparse.ArgumentParser(
         prog="emn-import",
         description="Import EMN/IDF/BDF files and generate JITX Python code",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("emn_file", help="Path to the EMN/IDF/BDF file to import")
     parser.add_argument("class_name", help="Name prefix for the generated classes")
     parser.add_argument("output_file", help="Output Python file path")
