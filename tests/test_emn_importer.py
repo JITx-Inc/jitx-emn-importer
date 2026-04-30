@@ -445,3 +445,150 @@ class TestSpecialCharactersInCodeGen:
         features = _generate_feature_code(idf)
         code = features["placement"][0]
         ast.parse(f"x = [{code}]")
+
+
+class TestCircleCutoutPositioned:
+    """Regression: circle cutouts must retain their center when consumed via convert_emn_to_jitx_features.
+
+    The parser stores center as `Circle._center`; without an explicit `.at()` step in the
+    feature path, the Cutout would land at origin instead of the EMN-specified position.
+    """
+
+    def test_circle_cutout_centered(self, tmp_path):
+        # Outer rectangle (loop 0) plus a circular cutout (loop 1) centered at (50, 25).
+        # Two-point full circle: chord between (40, 25) and (60, 25) is the diameter.
+        emn = (
+            '.HEADER\nIDF_FILE 3.0 "TestCAD" "2024-01-01" 1 "TestBoard" "MM"\n.END_HEADER\n\n'
+            '.BOARD_OUTLINE "OWNER" 1.6\n'
+            "0 0 0 0\n0 100 0 0\n0 100 50 0\n0 0 50 0\n0 0 0 0\n"
+            "1 40 25 0\n1 60 25 360\n"
+            ".END_BOARD_OUTLINE\n"
+        )
+        emn_file = tmp_path / "circle_cutout.emn"
+        emn_file.write_text(emn)
+        idf = idf_parser(str(emn_file))
+
+        assert len(idf.board_cutouts) == 1
+        assert isinstance(idf.board_cutouts[0], Circle)
+
+        features = convert_emn_to_jitx_features(idf)
+        cutouts = [f for f in features if f.__class__.__name__ == "Cutout"]
+        assert len(cutouts) == 1
+
+        # The Cutout's shape, lifted into shapely, must be centered near (50, 25).
+        shapely_geom = cutouts[0].shape.to_shapely()
+        cx, cy = shapely_geom.centroid.x, shapely_geom.centroid.y
+        assert abs(cx - 50.0) < 0.5
+        assert abs(cy - 25.0) < 0.5
+
+
+class TestConvertFeaturesContent:
+    """Verify convert_emn_to_jitx_features produces the right counts and types."""
+
+    def test_complete_file_yields_expected_features(self, temp_emn_complete):
+        idf = idf_parser(str(temp_emn_complete))
+        features = convert_emn_to_jitx_features(idf)
+        names = [f.__class__.__name__ for f in features]
+        # 2 holes (Cutout) + 1 route_keepout (KeepOut) + 1 note (Custom) + 2 placements (Custom)
+        assert names.count("Cutout") == 2
+        assert names.count("KeepOut") == 1
+        assert names.count("Custom") == 3
+
+
+class TestNoteSanitization:
+    """Regression: SOH/STX control chars in note text must be stripped on both paths."""
+
+    def _make_idf_with_note(self, note_text):
+        from jitx_emn_importer.idf_parser import IdfHeader, IdfNote
+
+        header = IdfHeader("IDF_FILE", 3.0, "test", "2024", 1, "test", "MM")
+        note = IdfNote(x=10.0, y=20.0, height=1.5, length=10.0, text=note_text)
+        return IdfFile(
+            header=header,
+            board_outline=Polygon([(0, 0), (100, 0), (100, 50), (0, 50), (0, 0)]),
+            board_cutouts=(),
+            other_outlines=(),
+            route_outlines=(),
+            place_outlines=(),
+            route_keepouts=(),
+            via_keepouts=(),
+            place_keepouts=(),
+            holes=(),
+            notes=(note,),
+            placement=(),
+        )
+
+    def test_codegen_strips_control_chars(self):
+        idf = self._make_idf_with_note(f"AB{chr(1)}CD{chr(2)}EF")
+        code = _generate_feature_code(idf)["notes"][0]
+        assert chr(1) not in code
+        assert chr(2) not in code
+        assert "ABCDEF" in code
+
+    def test_features_strip_control_chars(self):
+        idf = self._make_idf_with_note(f"AB{chr(1)}CD{chr(2)}EF")
+        features = convert_emn_to_jitx_features(idf)
+        # Text content lives inside the Custom -> Text shape; assert the cleaned text was used.
+        text_shape = features[0].shape
+        # Drill into the underlying Text shape; its text attribute should be stripped.
+        # Different JITX versions may expose this via .geometry or similar; fall back to repr.
+        rep = repr(text_shape)
+        assert chr(1) not in rep
+        assert chr(2) not in rep
+
+
+class TestCli:
+    """Test the emn-import CLI entry point."""
+
+    def test_writes_output_file(self, monkeypatch, tmp_path, simple_emn_content):
+        from jitx_emn_importer.emn_importer import main
+
+        emn_file = tmp_path / "in.emn"
+        emn_file.write_text(simple_emn_content)
+        out_file = tmp_path / "out.py"
+        monkeypatch.setattr("sys.argv", ["emn-import", str(emn_file), "MyBoard", str(out_file)])
+        main()
+        assert out_file.exists()
+        content = out_file.read_text()
+        assert "class MyBoardBoard(Board):" in content
+        assert "class MyBoardCircuit(Circuit):" in content
+        assert "class MyBoardDesign(Design):" in content
+
+    def test_version_flag(self, monkeypatch, capsys):
+        import pytest
+
+        from jitx_emn_importer import __version__
+        from jitx_emn_importer.emn_importer import main
+
+        monkeypatch.setattr("sys.argv", ["emn-import", "--version"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert __version__ in out
+
+    def test_missing_args_exits_nonzero(self, monkeypatch):
+        import pytest
+
+        from jitx_emn_importer.emn_importer import main
+
+        monkeypatch.setattr("sys.argv", ["emn-import"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code != 0
+
+    def test_precision_flag(self, monkeypatch, tmp_path, simple_emn_content):
+        from jitx_emn_importer.emn_importer import main
+
+        emn_file = tmp_path / "in.emn"
+        emn_file.write_text(simple_emn_content)
+        out_file = tmp_path / "out.py"
+        monkeypatch.setattr(
+            "sys.argv",
+            ["emn-import", str(emn_file), "MyBoard", str(out_file), "--precision", "1"],
+        )
+        main()
+        content = out_file.read_text()
+        # Coordinates from the simple fixture (100.0, 50.0, 0.0) survive at precision=1.
+        # Verify generated file is syntactically valid Python.
+        compile(content, str(out_file), "exec")

@@ -15,11 +15,15 @@ from jitx.shapes.primitive import Arc, ArcPolygon, Circle, Polygon
 
 logger = logging.getLogger(__name__)
 
+# Epsilons for floating-point comparisons.
+# _EPSILON: degenerate-geometry threshold (zero-length chord, sin=0).
+# _CLOSURE_EPSILON: tolerance for considering a polygon already closed.
+_EPSILON = 1e-10
+_CLOSURE_EPSILON = 1e-6
+
 
 class IdfException(Exception):
     """Exception for IDF parsing errors"""
-
-    pass
 
 
 @dataclass
@@ -139,7 +143,10 @@ class IdfParser:
             raise IdfException(f"{match_str} not found.")
 
     def _tokenize_line(self, line: str) -> list[str]:
-        """Tokenize a line, handling quotes properly"""
+        """Tokenize a line, splitting on whitespace outside of double-quoted regions.
+
+        IDF/EMN does not specify a quote-escape syntax; an embedded `"` ends the token.
+        """
         tokens = []
         i = 0
         in_quote = False
@@ -184,11 +191,7 @@ class IdfParser:
             )
 
     def _parse_loop_points(self, tokens: list[str]) -> list[LoopPoint]:
-        """Parse loop point data from tokens
-
-        Note: Stores raw coordinates without unit conversion.
-        Conversion happens in _points_to_geometry().
-        """
+        """Parse loop point data; coordinates are unit-converted later in _points_to_geometry."""
         points = []
         i = 0
         while i + 3 < len(tokens):
@@ -282,46 +285,40 @@ class IdfParser:
     def _points_to_geometry(
         self, loop_points: list[LoopPoint]
     ) -> list[Polygon | ArcPolygon | Circle]:
-        """Convert loop points to JITX geometry objects
+        """Convert loop points to JITX geometry objects.
 
-        Applies unit conversion (self.ucnv) to coordinates during geometry creation.
-        Handles straight lines, arcs, and full circles.
+        Applies unit conversion (self.ucnv) and dispatches each point on its
+        angle: 0 = straight-line, +/-360 = full circle, otherwise = arc.
         """
         if not loop_points:
             return []
 
-        # Group by loop number
         loops: dict[int, list[LoopPoint]] = {}
         for point in loop_points:
-            if point.loop_n not in loops:
-                loops[point.loop_n] = []
-            loops[point.loop_n].append(point)
+            loops.setdefault(point.loop_n, []).append(point)
 
         geometries = []
-        for loop_num, points in loops.items():
-            # Sort by id to ensure correct order
+        # Iterate in ascending loop_n order so the outer outline (loop 0)
+        # always comes first regardless of file ordering.
+        for loop_num, points in sorted(loops.items()):
             points.sort(key=lambda p: p.id)
-
             if not points:
                 continue
 
-            # Build geometry elements
-            elements = []
+            elements: list[tuple | Arc] = []
             first_point = (points[0].x * self.ucnv, points[0].y * self.ucnv)
             current_point = first_point
 
             for point in points:
                 if point.angle == 0.0:
-                    # Straight line point
                     new_point = (point.x * self.ucnv, point.y * self.ucnv)
                     elements.append(new_point)
                     current_point = new_point
                 elif abs(point.angle) == 360.0:
-                    # Full circle - chord is the diameter
+                    # Full circle: chord between current and next point is the diameter.
                     new_point = (point.x * self.ucnv, point.y * self.ucnv)
-                    dist = math.sqrt(
-                        (current_point[0] - new_point[0]) ** 2
-                        + (current_point[1] - new_point[1]) ** 2
+                    dist = math.hypot(
+                        current_point[0] - new_point[0], current_point[1] - new_point[1]
                     )
                     if dist > 0:
                         cx = (current_point[0] + new_point[0]) / 2.0
@@ -330,95 +327,90 @@ class IdfParser:
                         circle._center = (cx, cy)  # type: ignore[reportAttributeAccessIssue]
                         geometries.append(circle)
                     current_point = new_point
-                    continue  # Don't add to elements, return as separate circle
                 else:
-                    # Arc segment
-                    xp, yp = current_point
-                    xn = point.x * self.ucnv
-                    yn = point.y * self.ucnv
-                    angle = point.angle
+                    arc = self._arc_from_chord(
+                        current_point,
+                        point.x * self.ucnv,
+                        point.y * self.ucnv,
+                        point.angle,
+                        loop_num,
+                    )
+                    if arc is not None:
+                        elements.append(arc)
+                    current_point = (point.x * self.ucnv, point.y * self.ucnv)
 
-                    # Calculate arc parameters
-                    dist = math.sqrt((xp - xn) ** 2 + (yp - yn) ** 2)
-                    if dist < 1e-10:  # Points are too close
-                        logger.warning(
-                            "Arc segment in loop %d has zero or near-zero length, skipping",
-                            loop_num,
-                        )
-                        continue
+            # Close the loop if the geometric endpoint differs from the start.
+            # Use current_point (not elements[-1]) so a trailing arc closes too.
+            if elements and (
+                abs(current_point[0] - first_point[0]) > _CLOSURE_EPSILON
+                or abs(current_point[1] - first_point[1]) > _CLOSURE_EPSILON
+            ):
+                elements.append(first_point)
 
-                    xm = (xp + xn) / 2.0
-                    ym = (yp + yn) / 2.0
-
-                    rise_x = (xn - xp) / dist
-                    rise_y = (yn - yp) / dist
-
-                    half_sw_ang = math.radians(angle / 2.0)
-                    sin_half = math.sin(half_sw_ang)
-                    if abs(sin_half) < 1e-10:  # Avoid division by zero
-                        logger.warning(
-                            "Arc segment in loop %d has invalid angle %s, skipping", loop_num, angle
-                        )
-                        continue
-
-                    dist_over_2 = dist / 2.0
-                    radius = abs(dist_over_2 / sin_half)
-
-                    over180 = -1.0 if abs(angle) > 180.0 else 1.0
-                    negative = -1.0 if angle < 0 else 1.0
-
-                    # Calculate center point
-                    radius_sq_minus_d2 = radius**2 - dist_over_2**2
-                    if radius_sq_minus_d2 < -1e-6:  # Negative with tolerance
-                        logger.warning(
-                            "Arc segment in loop %d has invalid geometry"
-                            " (radius too small), skipping",
-                            loop_num,
-                        )
-                        continue
-
-                    dist_m_to_c = math.sqrt(max(0, radius_sq_minus_d2))
-                    xc = xm - rise_y * dist_m_to_c * over180 * negative
-                    yc = ym + rise_x * dist_m_to_c * over180 * negative
-
-                    start_ang = math.degrees(math.atan2(yp - yc, xp - xc))
-                    # Normalize to [0, 360)
-                    while start_ang < 0:
-                        start_ang += 360.0
-                    while start_ang >= 360.0:
-                        start_ang -= 360.0
-
-                    arc = Arc((xc, yc), radius, start_ang, angle)
-                    elements.append(arc)
-                    current_point = (xn, yn)
-
-            # EMN loops are implicitly closed, but ensure closure for polygon types
-            # If we have points and the last point is not the first, close the loop
-            if elements and isinstance(elements[0], tuple):
-                # Check if loop is already closed
-                if isinstance(elements[-1], tuple):
-                    last_pt = elements[-1]
-                    if (
-                        abs(last_pt[0] - first_point[0]) > 1e-6
-                        or abs(last_pt[1] - first_point[1]) > 1e-6
-                    ):
-                        # Not closed, add first point to close
-                        elements.append(first_point)
-
-            # Create geometry based on elements
-            if len(elements) == 1 and isinstance(elements[0], Circle):
-                geometries.append(elements[0])
-            elif any(isinstance(e, Arc) for e in elements):
-                # Has arcs - create ArcPolygon
-                if len(elements) > 0:
-                    geometries.append(ArcPolygon(elements))
+            if any(isinstance(e, Arc) for e in elements):
+                geometries.append(ArcPolygon(elements))
             else:
-                # Only points - create regular Polygon
                 poly_points = [e for e in elements if isinstance(e, tuple)]
                 if len(poly_points) >= 3:
                     geometries.append(Polygon(poly_points))
 
         return geometries
+
+    def _arc_from_chord(
+        self,
+        start: tuple[float, float],
+        xn: float,
+        yn: float,
+        angle: float,
+        loop_num: int,
+    ) -> Arc | None:
+        """Construct a JITX Arc from a chord (start->end) and a sweep angle.
+
+        Geometry: the arc center lies on the perpendicular bisector of the chord,
+        offset from the midpoint by `sqrt(radius^2 - (chord/2)^2)`. The sign of
+        that offset selects between the two possible centers, determined by:
+          - direction_sign: +1 for CCW (angle > 0), -1 for CW
+          - major_arc_sign: +1 for minor arc (|angle| <= 180), -1 for major
+        Returns None on degenerate input (logged as a warning).
+        """
+        xp, yp = start
+        chord = math.hypot(xn - xp, yn - yp)
+        if chord < _EPSILON:
+            logger.warning(
+                "Arc segment in loop %d has zero or near-zero length, skipping", loop_num
+            )
+            return None
+
+        sin_half = math.sin(math.radians(angle / 2.0))
+        if abs(sin_half) < _EPSILON:
+            logger.warning("Arc segment in loop %d has invalid angle %s, skipping", loop_num, angle)
+            return None
+
+        half_chord = chord / 2.0
+        radius = abs(half_chord / sin_half)
+
+        radius_sq_minus_h2 = radius**2 - half_chord**2
+        if radius_sq_minus_h2 < -_CLOSURE_EPSILON:
+            logger.warning(
+                "Arc segment in loop %d has invalid geometry (radius too small), skipping",
+                loop_num,
+            )
+            return None
+
+        chord_dx = (xn - xp) / chord
+        chord_dy = (yn - yp) / chord
+        midpoint_to_center = math.sqrt(max(0.0, radius_sq_minus_h2))
+        major_arc_sign = -1.0 if abs(angle) > 180.0 else 1.0
+        direction_sign = -1.0 if angle < 0 else 1.0
+        offset = midpoint_to_center * major_arc_sign * direction_sign
+
+        xm = (xp + xn) / 2.0
+        ym = (yp + yn) / 2.0
+        xc = xm - chord_dy * offset
+        yc = ym + chord_dx * offset
+
+        start_ang = math.degrees(math.atan2(yp - yc, xp - xc)) % 360.0
+        return Arc((xc, yc), radius, start_ang, angle)
 
     def parse(self) -> IdfFile:
         """Parse the IDF file and return structured data"""
@@ -431,14 +423,11 @@ class IdfParser:
         for line in lines:
             tokens.extend(self._tokenize_line(line.strip()))
 
-        # Note: We do NOT filter empty strings here because quoted empty
-        # strings ("") are valid tokens in placement records. Blank lines
-        # produce no tokens from _tokenize_line, so there are no spurious
-        # empty strings to worry about.
+        # Empty strings are not filtered: quoted "" is a valid token in placement records.
 
-        # Initialize collections
         headers = []
         board_outlines = []
+        panel_outlines = []
         other_outlines = []
         route_outlines = []
         place_outlines = []
@@ -504,7 +493,7 @@ class IdfParser:
                     outline = geometries[0]
                     cutouts = geometries[1:] if len(geometries) > 1 else []
 
-                    board_outline = IdfOutline(
+                    parsed = IdfOutline(
                         owner=owner,
                         ident=token,
                         thickness=thickness,
@@ -512,7 +501,10 @@ class IdfParser:
                         outline=outline,
                         cutouts=cutouts,
                     )
-                    board_outlines.append(board_outline)
+                    if token == ".PANEL_OUTLINE":
+                        panel_outlines.append(parsed)
+                    else:
+                        board_outlines.append(parsed)
 
                 i = i + 1 + end_pos + 1
 
@@ -683,19 +675,31 @@ class IdfParser:
                 else:
                     i += 1
 
-        # Validate parsed data
         if len(headers) != 1:
             raise IdfException(f"Expected exactly 1 header, found {len(headers)}")
 
-        if len(board_outlines) != 1:
-            raise IdfException(f"Expected exactly 1 board outline, found {len(board_outlines)}")
+        # Prefer .BOARD_OUTLINE; fall back to .PANEL_OUTLINE when only the panel is present.
+        if board_outlines and panel_outlines:
+            logger.warning(
+                "File contains both .BOARD_OUTLINE and .PANEL_OUTLINE; using .BOARD_OUTLINE"
+            )
+            primary_outlines = board_outlines
+        elif board_outlines:
+            primary_outlines = board_outlines
+        elif panel_outlines:
+            primary_outlines = panel_outlines
+        else:
+            raise IdfException("No board outline or panel outline found")
 
-        # Validate board outline geometry
-        outline = board_outlines[0].outline
+        if len(primary_outlines) != 1:
+            raise IdfException(
+                f"Expected exactly 1 board/panel outline, found {len(primary_outlines)}"
+            )
+
+        outline = primary_outlines[0].outline
         if outline is None:
             raise IdfException("Board outline has no geometry")
 
-        # Validate polygon has sufficient points
         if hasattr(outline, "elements"):
             num_elements = len(outline.elements)
             if num_elements < 3:
@@ -705,8 +709,8 @@ class IdfParser:
 
         return IdfFile(
             header=headers[0],
-            board_outline=board_outlines[0].outline,
-            board_cutouts=tuple(board_outlines[0].cutouts),
+            board_outline=primary_outlines[0].outline,
+            board_cutouts=tuple(primary_outlines[0].cutouts),
             other_outlines=tuple(other_outlines),
             route_outlines=tuple(route_outlines),
             place_outlines=tuple(place_outlines),
