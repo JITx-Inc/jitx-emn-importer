@@ -223,7 +223,7 @@ IDF_FILE 3.0 "Test System" "2024-01-01" 1 "TestBoard" "MM"
         emn_file = tmp_path / "test.emn"
         emn_file.write_text(emn_content)
 
-        with pytest.raises(IdfException, match="Expected exactly 1 board outline"):
+        with pytest.raises(IdfException, match="No board outline or panel outline found"):
             idf_parser(str(emn_file))
 
     def test_file_not_found(self, tmp_path):
@@ -428,3 +428,81 @@ class TestIdfVersion2:
         assert idf.holes[0].type == ""
         assert idf.holes[0].owner == ""
         assert idf.holes[1].plating == "NPTH"
+
+
+class TestLoopOrdering:
+    """Regression: loops in BOARD_OUTLINE must be ordered by loop_n (outer=0 first)."""
+
+    def test_outer_picked_when_cutout_listed_first(self, tmp_path):
+        # Cutout (loop 1) appears before outer (loop 0) in the file.
+        emn = (
+            '.HEADER\nIDF_FILE 3.0 "TestCAD" "2024-01-01" 1 "TestBoard" "MM"\n.END_HEADER\n\n'
+            '.BOARD_OUTLINE "OWNER" 1.6\n'
+            "1 40 20 0\n1 60 20 0\n1 60 30 0\n1 40 30 0\n1 40 20 0\n"
+            "0 0 0 0\n0 100 0 0\n0 100 50 0\n0 0 50 0\n0 0 0 0\n"
+            ".END_BOARD_OUTLINE\n"
+        )
+        emn_file = tmp_path / "swap.emn"
+        emn_file.write_text(emn)
+        idf = idf_parser(str(emn_file))
+        # Outer outline should be the 100x50 rectangle, not the small cutout.
+        outer_xs = [e[0] for e in idf.board_outline.elements]
+        assert max(outer_xs) == 100.0
+        assert len(idf.board_cutouts) == 1
+
+
+class TestArcEndingClosure:
+    """Regression: a loop ending with an arc whose endpoint != first_point must be closed."""
+
+    def test_loop_closed_after_trailing_arc(self, tmp_path):
+        # Square with one corner replaced by a 90° arc as the LAST element.
+        # Points: (0,0) -> (10,0) -> (10,10) -> arc to (5,5). first_point = (0,0).
+        emn = (
+            '.HEADER\nIDF_FILE 3.0 "TestCAD" "2024-01-01" 1 "TestBoard" "MM"\n.END_HEADER\n\n'
+            '.BOARD_OUTLINE "OWNER" 1.6\n'
+            "0 0 0 0\n0 10 0 0\n0 10 10 0\n0 5 5 90\n"
+            ".END_BOARD_OUTLINE\n"
+        )
+        emn_file = tmp_path / "arc_end.emn"
+        emn_file.write_text(emn)
+        idf = idf_parser(str(emn_file))
+        outline = idf.board_outline
+        # Should be an ArcPolygon containing a closing point back to (0, 0).
+        assert outline.__class__.__name__ == "ArcPolygon"
+        last = outline.elements[-1]
+        assert isinstance(last, tuple)
+        assert abs(last[0] - 0.0) < 1e-6 and abs(last[1] - 0.0) < 1e-6
+
+
+class TestBoardAndPanelOutline:
+    """Regression: a file with both .BOARD_OUTLINE and .PANEL_OUTLINE must parse."""
+
+    def test_both_present_prefers_board(self, tmp_path):
+        emn = (
+            '.HEADER\nIDF_FILE 3.0 "TestCAD" "2024-01-01" 1 "TestBoard" "MM"\n.END_HEADER\n\n'
+            '.BOARD_OUTLINE "OWNER" 1.6\n'
+            "0 0 0 0\n0 10 0 0\n0 10 10 0\n0 0 10 0\n0 0 0 0\n"
+            ".END_BOARD_OUTLINE\n\n"
+            '.PANEL_OUTLINE "OWNER" 1.6\n'
+            "0 0 0 0\n0 50 0 0\n0 50 50 0\n0 0 50 0\n0 0 0 0\n"
+            ".END_PANEL_OUTLINE\n"
+        )
+        emn_file = tmp_path / "both.emn"
+        emn_file.write_text(emn)
+        idf = idf_parser(str(emn_file))
+        # Board (10x10) wins over panel (50x50).
+        outer_xs = [e[0] for e in idf.board_outline.elements]
+        assert max(outer_xs) == 10.0
+
+    def test_panel_only_falls_back_to_panel(self, tmp_path):
+        emn = (
+            '.HEADER\nIDF_FILE 3.0 "TestCAD" "2024-01-01" 1 "TestBoard" "MM"\n.END_HEADER\n\n'
+            '.PANEL_OUTLINE "OWNER" 1.6\n'
+            "0 0 0 0\n0 50 0 0\n0 50 50 0\n0 0 50 0\n0 0 0 0\n"
+            ".END_PANEL_OUTLINE\n"
+        )
+        emn_file = tmp_path / "panel.emn"
+        emn_file.write_text(emn)
+        idf = idf_parser(str(emn_file))
+        outer_xs = [e[0] for e in idf.board_outline.elements]
+        assert max(outer_xs) == 50.0

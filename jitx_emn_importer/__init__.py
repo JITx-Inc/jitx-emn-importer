@@ -1,15 +1,6 @@
-"""
-JITX EMN/IDF Importer
+"""JITX EMN/IDF importer: parses CAD mechanical exports into JITX Board/Circuit/Design classes.
 
-A JITX Python library for importing EMN/IDF/BDF format files and converting them
-to JITX-compatible PCB design data. Parses mechanical board outline data, cutouts,
-keepouts, holes, notes, and placement information from CAD exports into JITX
-Python geometry and layer specifications.
-
-Main functions:
-- import_emn: Import EMN file and generate Board + Circuit + Design classes
-- idf_parser: Parse EMN/IDF file to structured data
-- convert_emn_to_jitx_features: Convert parsed data to JITX feature objects
+See the README for usage. Public API is enumerated in ``__all__`` below.
 """
 
 from .emn_importer import (

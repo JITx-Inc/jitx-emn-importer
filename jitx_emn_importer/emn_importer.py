@@ -26,6 +26,9 @@ DEFAULT_PRECISION = 4
 # Angles use fixed high precision to avoid geometric inconsistency
 _ANGLE_PRECISION = 10
 
+# Tolerance for treating a coordinate as effectively zero (e.g., a circle at origin).
+_EPSILON = 1e-10
+
 
 def _fmt(value: float, *, precision: int = DEFAULT_PRECISION) -> str:
     """Format a length/coordinate for code generation: round to given precision."""
@@ -107,14 +110,22 @@ def _arc_to_code(arc: Arc, *, precision: int = DEFAULT_PRECISION) -> str:
     )
 
 
+def _circle_to_code(shape: Circle, *, precision: int = DEFAULT_PRECISION) -> str:
+    """Format a Circle for code generation, emitting `.at(cx, cy)` if the parser stored a center."""
+    radius = _fmt(shape.radius, precision=precision)
+    center = getattr(shape, "_center", None)
+    if center and (abs(center[0]) > _EPSILON or abs(center[1]) > _EPSILON):
+        return (
+            f"Circle(radius={radius}).at("
+            f"{_fmt(center[0], precision=precision)}, {_fmt(center[1], precision=precision)})"
+        )
+    return f"Circle(radius={radius})"
+
+
 def shape_to_python_code(shape: Any, *, precision: int = DEFAULT_PRECISION) -> str:
     """Convert a JITX shape to a single-line Python code string."""
-    f = lambda v: _fmt(v, precision=precision)  # noqa: E731
     if isinstance(shape, Circle):
-        center = getattr(shape, "_center", None)
-        if center and (abs(center[0]) > 1e-10 or abs(center[1]) > 1e-10):
-            return f"Circle(radius={f(shape.radius)}).at({f(center[0])}, {f(center[1])})"
-        return f"Circle(radius={f(shape.radius)})"
+        return _circle_to_code(shape, precision=precision)
     elif isinstance(shape, ArcPolygon):
         parts = []
         for elem in shape.elements:
@@ -139,13 +150,9 @@ def shape_to_multiline_code(
 ) -> str:
     """Convert a JITX shape to multi-line Python code, one element per line."""
     prefix = "    " * indent
-    f = lambda v: _fmt(v, precision=precision)  # noqa: E731
 
     if isinstance(shape, Circle):
-        center = getattr(shape, "_center", None)
-        if center and (abs(center[0]) > 1e-10 or abs(center[1]) > 1e-10):
-            return f"Circle(radius={f(shape.radius)}).at({f(center[0])}, {f(center[1])})"
-        return f"Circle(radius={f(shape.radius)})"
+        return _circle_to_code(shape, precision=precision)
     elif isinstance(shape, ArcPolygon):
         lines = ["ArcPolygon(["]
         for elem in shape.elements:
@@ -230,6 +237,7 @@ def _generate_feature_code(
 
     # Notes
     for note in idf.notes:
+        # Strip IDF text control chars (SOH, STX) embedded by some CAD exporters.
         text = note.text.replace(chr(1), "").replace(chr(2), "")
         text_escaped = _escape_str(text)
         result["notes"].append(
@@ -362,16 +370,27 @@ def import_emn(
     )
 
 
+def _position_circle(shape: Any) -> Any:
+    """If shape is a Circle annotated with `_center`, return shape.at(cx, cy); else shape unchanged.
+
+    The parser stores full-circle centers via a private `_center` attribute on Circle
+    (Circle has no native center field). The code-gen path reads it and emits `.at(...)`;
+    feature-object consumers must apply it explicitly here.
+    """
+    if isinstance(shape, Circle):
+        center = getattr(shape, "_center", None)
+        if center is not None:
+            return shape.at(center[0], center[1])
+    return shape
+
+
 def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
-    """
-    Convert parsed EMN data to actual JITX feature objects (not code strings).
-    This can be used for direct programmatic access to the features.
-    """
+    """Convert parsed EMN data to JITX feature objects for direct programmatic use."""
     features = []
 
     # Board cutouts
     for cutout_shape in idf_file.board_cutouts:
-        features.append(Cutout(cutout_shape))
+        features.append(Cutout(_position_circle(cutout_shape)))
 
     # Holes
     for hole in idf_file.holes:
@@ -385,18 +404,28 @@ def convert_emn_to_jitx_features(idf_file: IdfFile) -> list[Any]:
             layer_set = LayerSet(-1)
         else:
             layer_set = LayerSet.all()
-        features.append(KeepOut(route_keepout.outline, layers=layer_set, pour=True, via=False))
+        features.append(
+            KeepOut(_position_circle(route_keepout.outline), layers=layer_set, pour=True, via=False)
+        )
 
     # Via keepouts
     for via_keepout in idf_file.via_keepouts:
-        features.append(KeepOut(via_keepout.outline, layers=LayerSet.all(), pour=False, via=True))
+        features.append(
+            KeepOut(
+                _position_circle(via_keepout.outline),
+                layers=LayerSet.all(),
+                pour=False,
+                via=True,
+            )
+        )
 
     # Place keepouts
     for place_keepout in idf_file.place_keepouts:
-        features.append(Custom(place_keepout.outline, name="Placement Keepout"))
+        features.append(Custom(_position_circle(place_keepout.outline), name="Placement Keepout"))
 
     # Notes
     for note in idf_file.notes:
+        # Strip IDF text control chars (SOH, STX) embedded by some CAD exporters.
         text = note.text.replace(chr(1), "").replace(chr(2), "")
         text_shape = Text(text, size=note.height, anchor=Anchor.SW).at(note.x, note.y)
         features.append(Custom(text_shape, name="Assembly Notes"))
